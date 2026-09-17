@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>管理后台 · 套图生成服务</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🛠 管理后台</h1>
+  <nav>
+    <a href="/index.html">返回应用</a>
+    <button class="nav-btn" id="logoutBtn">退出登录</button>
+  </nav>
+</header>
+
+<main>
+  <div id="deniedView" class="card hidden">
+    <p>仅管理员可访问此页面。</p>
+  </div>
+
+  <div id="adminView" class="hidden">
+
+    <div class="card">
+      <h3>平台统计</h3>
+      <div class="row" id="statsRow" style="gap:24px;"></div>
+    </div>
+
+    <div class="card">
+      <h3>全局默认配置</h3>
+      <div class="row">
+        <label>默认单张成本
+          <input type="number" step="0.01" id="cfgCost" style="width:100px;" />
+        </label>
+        <label>默认每日额度
+          <input type="number" step="1" id="cfgQuota" style="width:100px;" />
+        </label>
+        <button class="btn" id="saveCfgBtn">保存</button>
+        <span id="cfgSaved" class="success-msg hidden">已保存</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>用户管理</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>用户名</th><th>管理员</th><th>每日额度</th><th>单张成本</th>
+            <th>今日已用</th><th>累计生成</th><th>累计成本</th><th>注册时间</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>全部套图模板</h3>
+      <table>
+        <thead>
+          <tr><th>名称</th><th>归属</th><th>季节</th><th>场景/细节</th><th>产品</th><th>区域</th></tr>
+        </thead>
+        <tbody id="templatesBody"></tbody>
+      </table>
+    </div>
+
+  </div>
+</main>
+
+<script src="/js/api.js"></script>
+<script src="/js/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>套图生成服务</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🎄 产品套图生成服务</h1>
+  <nav id="navArea"></nav>
+</header>
+
+<main>
+
+  <!-- ============ 登录/注册 ============ -->
+  <div id="authView" class="auth-box card hidden">
+    <div class="tabs">
+      <div class="tab-btn active" data-tab="login">登录</div>
+      <div class="tab-btn" data-tab="register">注册</div>
+    </div>
+
+    <form id="loginForm">
+      <label class="field-label">用户名</label>
+      <input type="text" id="loginUsername" required />
+      <label class="field-label">密码</label>
+      <input type="password" id="loginPassword" required />
+      <div style="margin-top:14px;">
+        <button type="submit" class="btn">登录</button>
+      </div>
+      <div class="error-msg hidden" id="loginError"></div>
+    </form>
+
+    <form id="registerForm" class="hidden">
+      <label class="field-label">用户名</label>
+      <input type="text" id="regUsername" required minlength="3" />
+      <label class="field-label">密码（至少6位）</label>
+      <input type="password" id="regPassword" required minlength="6" />
+      <p class="muted">首个注册的账号将自动成为管理员。</p>
+      <div style="margin-top:14px;">
+        <button type="submit" class="btn">注册</button>
+      </div>
+      <div class="error-msg hidden" id="registerError"></div>
+    </form>
+  </div>
+
+  <!-- ============ 主应用 ============ -->
+  <div id="appView" class="hidden">
+
+    <div class="card">
+      <div class="row between">
+        <div>
+          <strong id="meUsername"></strong>
+          <span id="meAdminBadge" class="tag system hidden" style="margin-left:6px;">管理员</span>
+        </div>
+        <div class="muted">今日已用 <span id="quotaUsed">0</span> / <span id="quotaTotal">0</span></div>
+      </div>
+      <div class="quota-bar"><div id="quotaBar" style="width:0%"></div></div>
+      <div class="row" style="margin-top:8px;">
+        <span class="muted">API 中转密钥：</span>
+        <code class="key" id="relayKey">-</code>
+        <button class="btn secondary" id="regenKeyBtn" style="padding:4px 10px;font-size:12px;">重新生成</button>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- 筛选面板 -->
+      <div class="card" id="filterPanel">
+        <h3>筛选模板</h3>
+        <div class="filter-group">
+          <span class="label">季节</span>
+          <div class="chip-list" id="filterSeason"></div>
+        </div>
+        <div class="filter-group">
+          <span class="label">场景/细节</span>
+          <div class="chip-list" id="filterScene"></div>
+        </div>
+        <div class="filter-group">
+          <span class="label">产品</span>
+          <div class="chip-list" id="filterProduct"></div>
+        </div>
+        <div class="filter-group">
+          <span class="label">区域</span>
+          <div class="chip-list" id="filterRegion"></div>
+        </div>
+        <label class="row" style="font-size:13px;">
+          <input type="checkbox" id="mineOnlyChk" /> 只看我自己的模板
+        </label>
+      </div>
+
+      <!-- 模板列表 -->
+      <div class="card">
+        <h3>套图模板（<span id="tplCount">0</span>）</h3>
+        <div class="tpl-grid" id="tplGrid"></div>
+      </div>
+    </div>
+
+    <!-- 生成面板 -->
+    <div class="card" id="generatePanel">
+      <h3>生成套图</h3>
+      <div id="selectedTplName" class="muted" style="margin-bottom:8px;">未选择模板 —— 可直接自定义全部提示词字段</div>
+
+      <label class="row" style="font-size:13px;">
+        <input type="checkbox" id="useAsIsChk" checked /> 按模板原样生成（取消勾选后可修改下方各字段）
+      </label>
+
+      <div id="fieldsEditor"></div>
+
+      <label class="row" style="font-size:13px; margin-top:8px;">
+        <input type="checkbox" id="saveAsTplChk" /> 生成后保存为我的自定义模板
+      </label>
+      <input type="text" id="saveTplName" placeholder="自定义模板名称" class="hidden" style="margin-top:6px;" />
+
+      <hr style="margin:14px 0; border:none; border-top:1px solid var(--border);" />
+
+      <label class="field-label">上传产品图（1-2张）</label>
+      <input type="file" id="imageInput" accept="image/*" multiple />
+      <div class="thumb-list" id="imagePreview" style="margin-top:8px;"></div>
+
+      <div class="row" style="margin-top:12px;">
+        <label style="font-size:13px;">生成数量
+          <input type="number" id="genCount" value="1" min="1" max="4" style="width:60px;display:inline-block;margin-left:6px;" />
+        </label>
+        <span class="muted" id="costEstimate"></span>
+      </div>
+
+      <div style="margin-top:14px;">
+        <button class="btn" id="generateBtn">生成套图</button>
+        <span id="generateLoading" class="muted hidden">正在生成，请稍候…</span>
+      </div>
+      <div class="error-msg hidden" id="generateError"></div>
+    </div>
+
+    <!-- 结果 -->
+    <div class="card hidden" id="resultPanel">
+      <h3>本次生成结果</h3>
+      <div class="gen-grid" id="resultGrid"></div>
+    </div>
+
+    <!-- 历史记录 -->
+    <div class="card">
+      <div class="row between">
+        <h3 style="margin:0;">我的生成历史</h3>
+        <button class="btn secondary" id="downloadSelectedBtn">批量打包下载所选</button>
+      </div>
+      <p class="muted">生成的图片 15 天后自动过期删除，请及时下载保存。</p>
+      <div class="gen-grid" id="historyGrid"></div>
+    </div>
+
+  </div>
+</main>
+
+<script src="/js/api.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

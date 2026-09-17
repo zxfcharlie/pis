@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  product-image-service:
+    build: .
+    container_name: product-image-service
+    ports:
+      - "8411:8411"
+    volumes:
+      - ./data:/data
+    environment:
+      - PORT=8411
+      - SECRET_KEY=${SECRET_KEY:-please-change-this-secret}
+      - DEFAULT_COST_PER_IMAGE=${DEFAULT_COST_PER_IMAGE:-0.3}
+      - DEFAULT_DAILY_QUOTA=${DEFAULT_DAILY_QUOTA:-50}
+      - IMAGE_EXPIRE_DAYS=${IMAGE_EXPIRE_DAYS:-15}
+      - CLEANUP_INTERVAL_HOURS=${CLEANUP_INTERVAL_HOURS:-6}
+      # Leave OPENAI_API_KEY empty to run in placeholder-image demo mode.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - IMAGE_GEN_MODEL=${IMAGE_GEN_MODEL:-gpt-image-1}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.anthropic.com/v1}
+      - RELAY_PUBLIC_BASE_URL=${RELAY_PUBLIC_BASE_URL:-https://dailybonushub.com}
+    restart: unless-stopped

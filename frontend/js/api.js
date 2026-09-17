@@ -1,0 +1,81 @@
+const API = (() => {
+  const TOKEN_KEY = "pis_token";
+
+  function getToken() {
+    return localStorage.getItem(TOKEN_KEY);
+  }
+  function setToken(t) {
+    localStorage.setItem(TOKEN_KEY, t);
+  }
+  function clearToken() {
+    localStorage.removeItem(TOKEN_KEY);
+  }
+  function isLoggedIn() {
+    return !!getToken();
+  }
+
+  async function request(path, { method = "GET", body, isForm = false, headers = {} } = {}) {
+    const token = getToken();
+    const finalHeaders = { ...headers };
+    if (token) finalHeaders["Authorization"] = "Bearer " + token;
+    let finalBody = body;
+    if (body && !isForm) {
+      finalHeaders["Content-Type"] = "application/json";
+      finalBody = JSON.stringify(body);
+    }
+    const resp = await fetch(path, { method, headers: finalHeaders, body: finalBody });
+    if (resp.status === 401) {
+      clearToken();
+      renderAuthState();
+      throw new Error("登录已过期，请重新登录");
+    }
+    let data = null;
+    const ct = resp.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      data = await resp.json();
+    }
+    if (!resp.ok) {
+      const msg = (data && (data.detail || data.message)) || `请求失败 (${resp.status})`;
+      throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    }
+    return data !== null ? data : resp;
+  }
+
+  return {
+    getToken, setToken, clearToken, isLoggedIn,
+    register: (username, password) => request("/api/auth/register", { method: "POST", body: { username, password } }),
+    login: (username, password) => request("/api/auth/login", { method: "POST", body: { username, password } }),
+    me: () => request("/api/auth/me"),
+    regenerateRelayKey: () => request("/api/auth/relay-key/regenerate", { method: "POST" }),
+
+    templateFilters: () => request("/api/templates/filters"),
+    listTemplates: (params) => {
+      const qs = new URLSearchParams();
+      for (const key of ["season", "scene", "product", "region"]) {
+        (params[key] || []).forEach((v) => qs.append(key, v));
+      }
+      if (params.mine_only) qs.append("mine_only", "true");
+      return request("/api/templates?" + qs.toString());
+    },
+    getTemplate: (id) => request(`/api/templates/${id}`),
+    createTemplate: (payload, asSystem = false) =>
+      request(`/api/templates?as_system=${asSystem}`, { method: "POST", body: payload }),
+    updateTemplate: (id, payload) => request(`/api/templates/${id}`, { method: "PUT", body: payload }),
+    deleteTemplate: (id) => request(`/api/templates/${id}`, { method: "DELETE" }),
+
+    generate: (formData) => request("/api/generate", { method: "POST", body: formData, isForm: true }),
+    listGenerations: (page = 1) => request(`/api/generations?page=${page}&page_size=20`),
+    batchDownload: (ids) => request("/api/generations/batch-download", { method: "POST", body: { ids } }),
+
+    adminListUsers: () => request("/api/admin/users"),
+    adminUpdateUser: (id, payload) => request(`/api/admin/users/${id}`, { method: "PUT", body: payload }),
+    adminAllTemplates: () => request("/api/admin/templates"),
+    adminGetConfig: () => request("/api/admin/config"),
+    adminUpdateConfig: (payload) => request("/api/admin/config", { method: "PUT", body: payload }),
+    adminStats: () => request("/api/admin/stats"),
+  };
+})();
+
+function renderAuthState() {
+  // overridden by page-level scripts
+}

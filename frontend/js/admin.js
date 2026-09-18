@@ -41,6 +41,8 @@ async function loadConfig() {
   const cfg = await API.adminGetConfig();
   $("cfgCost").value = cfg.default_cost_per_image;
   $("cfgQuota").value = cfg.default_daily_quota;
+  $("cfgRelayBaseUrl").value = cfg.remote_relay_base_url || "";
+  $("cfgRelayKey").value = cfg.remote_relay_api_key || "";
 }
 
 $("saveCfgBtn").addEventListener("click", async () => {
@@ -52,14 +54,56 @@ $("saveCfgBtn").addEventListener("click", async () => {
   setTimeout(() => $("cfgSaved").classList.add("hidden"), 2000);
 });
 
+$("saveRelayBtn").addEventListener("click", async () => {
+  await API.adminUpdateConfig({
+    remote_relay_base_url: $("cfgRelayBaseUrl").value.trim(),
+    remote_relay_api_key: $("cfgRelayKey").value.trim(),
+  });
+  $("relaySaved").classList.remove("hidden");
+  setTimeout(() => $("relaySaved").classList.add("hidden"), 2000);
+});
+
 async function loadUsers() {
   const users = await API.adminListUsers();
+
+  // ---- pending approval section ----
+  const pending = users.filter((u) => !u.is_approved);
+  $("pendingCount").textContent = pending.length;
+  $("pendingEmpty").classList.toggle("hidden", pending.length > 0);
+  const pendingBody = $("pendingBody");
+  pendingBody.innerHTML = "";
+  pending.forEach((u) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(u.username)}</td>
+      <td>${new Date(u.created_at + "Z").toLocaleString()}</td>
+      <td>
+        <button class="btn" style="padding:4px 10px;font-size:12px;" data-act="approve">通过</button>
+        <button class="btn secondary" style="padding:4px 10px;font-size:12px;" data-act="reject">拒绝并删除</button>
+      </td>
+    `;
+    tr.querySelector('[data-act=approve]').addEventListener("click", async () => {
+      await API.adminApproveUser(u.id);
+      await loadUsers();
+      await loadStats();
+    });
+    tr.querySelector('[data-act=reject]').addEventListener("click", async () => {
+      if (!confirm(`确定拒绝并删除账号 "${u.username}" 吗？`)) return;
+      await API.adminDeleteUser(u.id);
+      await loadUsers();
+      await loadStats();
+    });
+    pendingBody.appendChild(tr);
+  });
+
+  // ---- full user table (approved + pending, for full visibility) ----
   const body = $("usersBody");
   body.innerHTML = "";
   users.forEach((u) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${escapeHtml(u.username)}</td>
+      <td>${u.is_approved ? '<span class="tag" style="background:#dcfce7;color:#166534;">已通过</span>' : '<span class="tag" style="background:#fef3c7;color:#92400e;">待审核</span>'}</td>
       <td><input type="checkbox" data-field="is_admin" ${u.is_admin ? "checked" : ""} /></td>
       <td><input type="number" step="1" data-field="daily_quota" value="${u.daily_quota}" /></td>
       <td><input type="number" step="0.01" data-field="cost_per_image" value="${u.cost_per_image}" /></td>

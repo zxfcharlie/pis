@@ -23,16 +23,19 @@ class Settings:
     IMAGE_EXPIRE_DAYS: int = int(os.getenv("IMAGE_EXPIRE_DAYS", "15"))
     CLEANUP_INTERVAL_HOURS: int = int(os.getenv("CLEANUP_INTERVAL_HOURS", "6"))
 
-    # --- Upstream AI providers used by the relay (/v1/*) and by image generation.
-    # These are server-side secrets set by whoever deploys the container; end users
-    # only ever see their own rk-... relay key, never these. ---
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-    ANTHROPIC_BASE_URL: str = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
-    # Model used to actually render product photo-sets. Swap for whatever
-    # image-generation model/provider you have access to.
-    IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "gpt-image-1")
+    # --- Upstream: this service does NOT hold raw OpenAI/Anthropic keys itself.
+    # Instead it calls out to an existing remote relay (e.g. the user's own
+    # ai-relay project at http://<server>:8511/v1) using a single rk-... key
+    # issued by that relay. These env vars only seed the GlobalConfig row on
+    # first boot; from then on the admin edits them from 设置 -> 中转访问 in the
+    # admin panel (persisted in the DB, no redeploy needed). ---
+    REMOTE_RELAY_BASE_URL: str = os.getenv("REMOTE_RELAY_BASE_URL", "")
+    REMOTE_RELAY_API_KEY: str = os.getenv("REMOTE_RELAY_API_KEY", "")
+    # Model used to actually render product photo-sets via the remote relay's
+    # /v1/images/edits. Swap for whatever image model your relay exposes.
+    IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "gpt-image-2")
+    # Default chat model used if a relay chat call doesn't specify one.
+    CHAT_MODEL: str = os.getenv("CHAT_MODEL", "claude-sonnet-4-6")
 
     RELAY_PUBLIC_BASE_URL: str = os.getenv("RELAY_PUBLIC_BASE_URL", "https://dailybonushub.com")
 

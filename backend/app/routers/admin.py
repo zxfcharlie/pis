@@ -18,6 +18,7 @@ def _user_to_admin_out(db: Session, u: models.User) -> schemas.AdminUserOut:
         id=u.id,
         username=u.username,
         is_admin=u.is_admin,
+        is_approved=u.is_approved,
         daily_quota=u.daily_quota,
         cost_per_image=u.cost_per_image,
         used_today=crud.used_today(db, u.id),
@@ -51,6 +52,29 @@ def update_user(
     return _user_to_admin_out(db, u)
 
 
+@router.post("/users/{user_id}/approve", response_model=schemas.AdminUserOut)
+def approve_user(user_id: int, admin: models.User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    u = db.query(models.User).filter(models.User.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    u.is_approved = True
+    db.commit()
+    db.refresh(u)
+    return _user_to_admin_out(db, u)
+
+
+@router.delete("/users/{user_id}")
+def delete_user(user_id: int, admin: models.User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="不能删除当前登录的账号")
+    u = db.query(models.User).filter(models.User.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    db.delete(u)
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/templates", response_model=List[schemas.TemplateOut])
 def all_templates(admin: models.User = Depends(get_current_admin), db: Session = Depends(get_db)):
     from .templates import _to_out  # avoid circular import at module load time
@@ -65,6 +89,8 @@ def get_config(admin: models.User = Depends(get_current_admin), db: Session = De
     return schemas.AdminConfigOut(
         default_cost_per_image=cfg.default_cost_per_image,
         default_daily_quota=cfg.default_daily_quota,
+        remote_relay_base_url=cfg.remote_relay_base_url or "",
+        remote_relay_api_key=cfg.remote_relay_api_key or "",
     )
 
 
@@ -83,6 +109,8 @@ def update_config(
     return schemas.AdminConfigOut(
         default_cost_per_image=cfg.default_cost_per_image,
         default_daily_quota=cfg.default_daily_quota,
+        remote_relay_base_url=cfg.remote_relay_base_url or "",
+        remote_relay_api_key=cfg.remote_relay_api_key or "",
     )
 
 

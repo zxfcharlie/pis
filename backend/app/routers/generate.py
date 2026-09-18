@@ -51,6 +51,11 @@ def generate(
     n: int = Form(1),
     save_as_template: bool = Form(False),
     template_name: Optional[str] = Form(None),
+    # OpenAI Images API params, forwarded to the remote relay as-is
+    img_size: Optional[str] = Form("auto"),
+    img_quality: Optional[str] = Form("auto"),
+    img_output_format: Optional[str] = Form("png"),
+    img_background: Optional[str] = Form("auto"),
     # override fields - only applied when use_template_as_is is False
     subject: Optional[str] = Form(None),
     style: Optional[str] = Form(None),
@@ -112,7 +117,17 @@ def generate(
     job_token = uuid.uuid4().hex
 
     try:
-        output_images_bytes = image_gen.generate_images(input_bytes_list, final_fields, n=n)
+        output_images_bytes = image_gen.generate_images(
+            input_bytes_list,
+            final_fields,
+            n=n,
+            relay_base_url=cfg.remote_relay_base_url or "",
+            relay_api_key=cfg.remote_relay_api_key or "",
+            size=img_size,
+            quality=img_quality,
+            output_format=img_output_format,
+            background=img_background,
+        )
         status_str = "success"
         error_message = ""
     except Exception as e:  # pragma: no cover - defensive
@@ -120,7 +135,12 @@ def generate(
         status_str = "failed"
         error_message = str(e)
 
-    output_rel_paths = storage.save_generated_images(user.id, job_token, output_images_bytes) if output_images_bytes else []
+    ext = img_output_format if img_output_format in ("png", "jpeg", "webp") else "png"
+    output_rel_paths = (
+        storage.save_generated_images(user.id, job_token, output_images_bytes, ext=ext)
+        if output_images_bytes
+        else []
+    )
     actual_cost = cost_per_image * len(output_rel_paths)
 
     job = models.GenerationJob(
@@ -196,7 +216,9 @@ def get_generation_image(job_id: int, index: int, user: models.User = Depends(ge
     p = storage.abs_generated_path(paths[index])
     if not p.exists():
         raise HTTPException(status_code=404, detail="图片已过期或不存在")
-    return Response(content=p.read_bytes(), media_type="image/png")
+    ext = p.suffix.lower().lstrip(".")
+    media_type = {"png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg", "webp": "image/webp"}.get(ext, "image/png")
+    return Response(content=p.read_bytes(), media_type=media_type)
 
 
 @router.post("/api/generations/batch-download")

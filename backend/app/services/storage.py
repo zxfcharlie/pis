@@ -36,12 +36,12 @@ def save_upload_bytes(user_id: int, filename: str, content: bytes) -> str:
     return str(dest.relative_to(settings.UPLOAD_DIR))
 
 
-def save_generated_images(user_id: int, job_token: str, images: List[bytes]) -> List[str]:
+def save_generated_images(user_id: int, job_token: str, images: List[bytes], ext: str = "png") -> List[str]:
     """Returns paths relative to GENERATED_DIR."""
     out_dir = job_output_dir(user_id, job_token)
     rel_paths = []
     for idx, img_bytes in enumerate(images):
-        fname = f"image_{idx + 1}.png"
+        fname = f"image_{idx + 1}.{ext}"
         (out_dir / fname).write_bytes(img_bytes)
         rel_paths.append(str((out_dir / fname).relative_to(settings.GENERATED_DIR)))
     return rel_paths

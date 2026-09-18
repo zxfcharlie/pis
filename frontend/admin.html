@@ -43,11 +43,35 @@
     </div>
 
     <div class="card">
+      <h3>设置 · 中转访问</h3>
+      <p class="muted">套图生成 / 对话中转都会通过这个远程中转服务转发，本服务不再直接保存 OpenAI / Anthropic 的原始密钥。</p>
+      <div class="row">
+        <label style="flex:1;min-width:280px;">Base URL
+          <input type="text" id="cfgRelayBaseUrl" placeholder="http://<你的服务器>:8511/v1" />
+        </label>
+        <label style="flex:1;min-width:220px;">中转密钥
+          <input type="text" id="cfgRelayKey" placeholder="rk-xxxxxxxx" />
+        </label>
+        <button class="btn" id="saveRelayBtn" style="align-self:flex-end;">保存</button>
+        <span id="relaySaved" class="success-msg hidden" style="align-self:flex-end;">已保存</span>
+      </div>
+    </div>
+
+    <div class="card" id="pendingCard">
+      <h3>待审核用户（<span id="pendingCount">0</span>）</h3>
+      <table>
+        <thead><tr><th>用户名</th><th>注册时间</th><th>操作</th></tr></thead>
+        <tbody id="pendingBody"></tbody>
+      </table>
+      <p class="muted" id="pendingEmpty">暂无待审核账号</p>
+    </div>
+
+    <div class="card">
       <h3>用户管理</h3>
       <table>
         <thead>
           <tr>
-            <th>用户名</th><th>管理员</th><th>每日额度</th><th>单张成本</th>
+            <th>用户名</th><th>状态</th><th>管理员</th><th>每日额度</th><th>单张成本</th>
             <th>今日已用</th><th>累计生成</th><th>累计成本</th><th>注册时间</th><th>操作</th>
           </tr>
         </thead>

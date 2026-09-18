@@ -9,7 +9,7 @@ from ..models import gen_relay_key
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.post("/register", response_model=schemas.TokenOut)
+@router.post("/register", response_model=schemas.RegisterOut)
 def register(payload: schemas.RegisterIn, db: Session = Depends(get_db)):
     existing = db.query(models.User).filter(models.User.username == payload.username).first()
     if existing:
@@ -22,6 +22,7 @@ def register(payload: schemas.RegisterIn, db: Session = Depends(get_db)):
         username=payload.username,
         password_hash=hash_password(payload.password),
         is_admin=is_first_user,
+        is_approved=is_first_user,  # first account (admin) is auto-approved
         daily_quota=cfg.default_daily_quota,
         cost_per_image=cfg.default_cost_per_image,
         relay_key=gen_relay_key(),
@@ -30,8 +31,15 @@ def register(payload: schemas.RegisterIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    token = create_access_token(user.username)
-    return schemas.TokenOut(access_token=token)
+    if is_first_user:
+        token = create_access_token(user.username)
+        return schemas.RegisterOut(status="active", message="注册成功，已自动成为管理员", access_token=token)
+
+    return schemas.RegisterOut(
+        status="pending",
+        message="注册成功，请等待管理员审核通过后再登录",
+        access_token=None,
+    )
 
 
 @router.post("/login", response_model=schemas.TokenOut)
@@ -39,6 +47,8 @@ def login(payload: schemas.LoginIn, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == payload.username).first()
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
+    if not user.is_approved:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号正在等待管理员审核，请稍后再试")
     token = create_access_token(user.username)
     return schemas.TokenOut(access_token=token)
 

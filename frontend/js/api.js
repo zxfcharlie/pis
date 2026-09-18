@@ -44,11 +44,19 @@ const API = (() => {
   return {
     getToken, setToken, clearToken, isLoggedIn,
     register: (username, password) => request("/api/auth/register", { method: "POST", body: { username, password } }),
+    // NOTE: /api/auth/register now returns {status:"active"|"pending", message, access_token?}
     login: (username, password) => request("/api/auth/login", { method: "POST", body: { username, password } }),
     me: () => request("/api/auth/me"),
     regenerateRelayKey: () => request("/api/auth/relay-key/regenerate", { method: "POST" }),
 
-    templateFilters: () => request("/api/templates/filters"),
+    templateFilters: (params = {}) => {
+      const qs = new URLSearchParams();
+      for (const key of ["season", "scene", "product", "region"]) {
+        (params[key] || []).forEach((v) => qs.append(key, v));
+      }
+      if (params.mine_only) qs.append("mine_only", "true");
+      return request("/api/templates/filters?" + qs.toString());
+    },
     listTemplates: (params) => {
       const qs = new URLSearchParams();
       for (const key of ["season", "scene", "product", "region"]) {
@@ -69,6 +77,8 @@ const API = (() => {
 
     adminListUsers: () => request("/api/admin/users"),
     adminUpdateUser: (id, payload) => request(`/api/admin/users/${id}`, { method: "PUT", body: payload }),
+    adminApproveUser: (id) => request(`/api/admin/users/${id}/approve`, { method: "POST" }),
+    adminDeleteUser: (id) => request(`/api/admin/users/${id}`, { method: "DELETE" }),
     adminAllTemplates: () => request("/api/admin/templates"),
     adminGetConfig: () => request("/api/admin/config"),
     adminUpdateConfig: (payload) => request("/api/admin/config", { method: "PUT", body: payload }),

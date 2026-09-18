@@ -1,11 +1,12 @@
 // ---------------- state ----------------
 let ME = null;
-let FILTER_OPTIONS = { seasons: [], scenes: [], products: [], regions: [] };
-let SELECTED_FILTERS = { season: new Set(), scene: new Set(), product: new Set(), region: new Set() };
+// cascading filter order: season -> product -> scene -> region
+let SELECTED_FILTERS = { season: new Set(), product: new Set(), scene: new Set(), region: new Set() };
 let TEMPLATES = [];
-let SELECTED_TEMPLATE = null;
+let SELECTED_TEMPLATES = new Map(); // id -> {template, count}
 let UPLOAD_FILES = [];
 let HISTORY_SELECTED = new Set();
+let AUTO_SUGGESTED_NAME = "";
 
 const FIELD_DEFS = [
   ["subject", "主体"],
@@ -32,8 +33,11 @@ async function init() {
   try {
     await loadMe();
     showApp();
-    await Promise.all([loadFilters(), loadTemplates(), loadHistory()]);
-    renderFieldsEditor();
+    await loadFilterOptions();
+    await loadTemplates();
+    await loadHistory();
+    renderSelectedPanel();
+    renderGeneratePanel();
   } catch (e) {
     console.error(e);
     showAuth();
@@ -98,10 +102,18 @@ $("loginForm").addEventListener("submit", async (e) => {
 $("registerForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("registerError").classList.add("hidden");
+  $("registerSuccess").classList.add("hidden");
   try {
-    const { access_token } = await API.register($("regUsername").value, $("regPassword").value);
-    API.setToken(access_token);
-    await init();
+    const result = await API.register($("regUsername").value, $("regPassword").value);
+    if (result.status === "active" && result.access_token) {
+      API.setToken(result.access_token);
+      await init();
+      return;
+    }
+    // pending approval - don't log in yet
+    $("registerSuccess").textContent = result.message || "注册成功，请等待管理员审核";
+    $("registerSuccess").classList.remove("hidden");
+    $("registerForm").reset();
   } catch (err) {
     $("registerError").textContent = err.message;
     $("registerError").classList.remove("hidden");
@@ -133,13 +145,29 @@ $("regenKeyBtn").addEventListener("click", async () => {
   $("relayKey").textContent = ME.relay_key;
 });
 
-// ---------------- filters ----------------
-async function loadFilters() {
-  FILTER_OPTIONS = await API.templateFilters();
-  renderChipGroup("filterSeason", FILTER_OPTIONS.seasons, "season");
-  renderChipGroup("filterScene", FILTER_OPTIONS.scenes, "scene");
-  renderChipGroup("filterProduct", FILTER_OPTIONS.products, "product");
-  renderChipGroup("filterRegion", FILTER_OPTIONS.regions, "region");
+// ---------------- cascading filters: season -> product -> scene -> region ----------------
+async function loadFilterOptions() {
+  const opts = await API.templateFilters({
+    season: [...SELECTED_FILTERS.season],
+    product: [...SELECTED_FILTERS.product],
+    scene: [...SELECTED_FILTERS.scene],
+    region: [...SELECTED_FILTERS.region],
+    mine_only: $("mineOnlyChk").checked,
+  });
+
+  renderChipGroup("filterSeason", opts.seasons, "season");
+
+  const showProduct = SELECTED_FILTERS.season.size > 0;
+  $("groupProduct").classList.toggle("hidden", !showProduct);
+  if (showProduct) renderChipGroup("filterProduct", opts.products, "product");
+
+  const showScene = showProduct && SELECTED_FILTERS.product.size > 0;
+  $("groupScene").classList.toggle("hidden", !showScene);
+  if (showScene) renderChipGroup("filterScene", opts.scenes, "scene");
+
+  const showRegion = showScene && SELECTED_FILTERS.scene.size > 0;
+  $("groupRegion").classList.toggle("hidden", !showRegion);
+  if (showRegion) renderChipGroup("filterRegion", opts.regions, "region");
 }
 
 function renderChipGroup(containerId, values, group) {
@@ -149,70 +177,226 @@ function renderChipGroup(containerId, values, group) {
     const chip = document.createElement("div");
     chip.className = "chip" + (SELECTED_FILTERS[group].has(v) ? " active" : "");
     chip.textContent = v;
-    chip.onclick = () => {
-      if (SELECTED_FILTERS[group].has(v)) SELECTED_FILTERS[group].delete(v);
-      else SELECTED_FILTERS[group].add(v);
-      chip.classList.toggle("active");
-      loadTemplates();
-    };
+    chip.onclick = () => onFilterToggle(group, v);
     el.appendChild(chip);
   });
 }
 
-$("mineOnlyChk").addEventListener("change", loadTemplates);
+const FILTER_ORDER = ["season", "product", "scene", "region"];
 
-// ---------------- templates ----------------
+async function onFilterToggle(group, value) {
+  if (SELECTED_FILTERS[group].has(value)) SELECTED_FILTERS[group].delete(value);
+  else SELECTED_FILTERS[group].add(value);
+
+  // changing an upstream level resets everything downstream of it
+  const idx = FILTER_ORDER.indexOf(group);
+  FILTER_ORDER.slice(idx + 1).forEach((g) => SELECTED_FILTERS[g].clear());
+
+  SELECTED_TEMPLATES.clear();
+  await loadFilterOptions();
+  await loadTemplates();
+  renderSelectedPanel();
+  renderGeneratePanel();
+}
+
+$("mineOnlyChk").addEventListener("change", async () => {
+  await loadFilterOptions();
+  await loadTemplates();
+});
+
+$("resetFilterBtn").addEventListener("click", async () => {
+  FILTER_ORDER.forEach((g) => SELECTED_FILTERS[g].clear());
+  SELECTED_TEMPLATES.clear();
+  $("mineOnlyChk").checked = false;
+  await loadFilterOptions();
+  await loadTemplates();
+  renderSelectedPanel();
+  renderGeneratePanel();
+});
+
+// ---------------- templates (multi-select, grouped by season+product) ----------------
 async function loadTemplates() {
   TEMPLATES = await API.listTemplates({
     season: [...SELECTED_FILTERS.season],
-    scene: [...SELECTED_FILTERS.scene],
     product: [...SELECTED_FILTERS.product],
+    scene: [...SELECTED_FILTERS.scene],
     region: [...SELECTED_FILTERS.region],
     mine_only: $("mineOnlyChk").checked,
   });
   $("tplCount").textContent = TEMPLATES.length;
-  const grid = $("tplGrid");
-  grid.innerHTML = "";
-  TEMPLATES.forEach((t) => {
-    const card = document.createElement("div");
-    card.className = "tpl-card" + (SELECTED_TEMPLATE && SELECTED_TEMPLATE.id === t.id ? " selected" : "");
-    card.innerHTML = `
-      <div class="name">${escapeHtml(t.name)}</div>
-      <div class="tags">
-        ${t.is_system ? '<span class="tag system">系统模板</span>' : '<span class="tag">我的模板</span>'}
-        ${t.season ? `<span class="tag">${escapeHtml(t.season)}</span>` : ""}
-        ${t.scene ? `<span class="tag">${escapeHtml(t.scene)}</span>` : ""}
-        ${t.product ? `<span class="tag">${escapeHtml(t.product)}</span>` : ""}
-        ${t.region ? `<span class="tag">${escapeHtml(t.region)}</span>` : ""}
-      </div>
-      <div class="snippet">${escapeHtml(t.subject)}</div>
-    `;
-    card.onclick = () => selectTemplate(t);
-    grid.appendChild(card);
-  });
+  renderTemplateGroups();
 }
 
-function selectTemplate(t) {
-  SELECTED_TEMPLATE = t;
-  $("useAsIsChk").checked = true;
-  $("selectedTplName").textContent = "已选模板：" + t.name + (t.is_system ? "（系统模板，只读）" : "");
-  loadTemplates();
+function renderTemplateGroups() {
+  const container = $("tplGroups");
+  container.innerHTML = "";
+
+  const groups = new Map(); // "season||product" -> [templates]
+  TEMPLATES.forEach((t) => {
+    const key = `${t.season || "未分类季节"}｜${t.product || "未分类产品"}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  });
+
+  for (const [groupLabel, items] of groups) {
+    const section = document.createElement("div");
+    section.style.marginBottom = "16px";
+    const heading = document.createElement("div");
+    heading.className = "muted";
+    heading.style.margin = "4px 0 8px";
+    heading.style.fontWeight = "600";
+    heading.textContent = groupLabel + `（${items.length}）`;
+    section.appendChild(heading);
+
+    const grid = document.createElement("div");
+    grid.className = "tpl-grid";
+    items.forEach((t) => grid.appendChild(renderTplCard(t)));
+    section.appendChild(grid);
+    container.appendChild(section);
+  }
+}
+
+function renderTplCard(t) {
+  const card = document.createElement("div");
+  const isSelected = SELECTED_TEMPLATES.has(t.id);
+  card.className = "tpl-card" + (isSelected ? " selected" : "");
+  card.innerHTML = `
+    <div class="name">
+      <input type="checkbox" ${isSelected ? "checked" : ""} style="margin-right:6px;" />
+      ${escapeHtml(t.name)}
+    </div>
+    <div class="tags">
+      ${t.is_system ? '<span class="tag system">系统模板</span>' : '<span class="tag">我的模板</span>'}
+      ${t.season ? `<span class="tag">${escapeHtml(t.season)}</span>` : ""}
+      ${t.product ? `<span class="tag">${escapeHtml(t.product)}</span>` : ""}
+      ${t.scene ? `<span class="tag">${escapeHtml(t.scene)}</span>` : ""}
+      ${t.region ? `<span class="tag">${escapeHtml(t.region)}</span>` : ""}
+    </div>
+    <div class="snippet">${escapeHtml(t.subject)}</div>
+  `;
+  card.onclick = () => toggleTemplateSelection(t);
+  return card;
+}
+
+function toggleTemplateSelection(t) {
+  if (SELECTED_TEMPLATES.has(t.id)) {
+    SELECTED_TEMPLATES.delete(t.id);
+  } else {
+    SELECTED_TEMPLATES.set(t.id, { template: t, count: 1 });
+  }
+  renderTemplateGroups();
+  renderSelectedPanel();
+  renderGeneratePanel();
+}
+
+// ---------------- 已选套图面板 ----------------
+function renderSelectedPanel() {
+  const panel = $("selectedPanel");
+  const list = $("selectedList");
+  if (SELECTED_TEMPLATES.size === 0) {
+    panel.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+  panel.classList.remove("hidden");
+  list.innerHTML = "";
+  for (const [id, entry] of SELECTED_TEMPLATES) {
+    const row = document.createElement("div");
+    row.className = "row between";
+    row.style.padding = "8px 0";
+    row.style.borderBottom = "1px solid var(--border)";
+    row.innerHTML = `
+      <div>${escapeHtml(entry.template.name)}</div>
+      <div class="row">
+        <label style="font-size:12px;">生成数量
+          <input type="number" min="1" max="4" value="${entry.count}" style="width:56px;display:inline-block;margin-left:4px;" />
+        </label>
+        <button class="btn secondary" style="padding:4px 10px;font-size:12px;">移除</button>
+      </div>
+    `;
+    row.querySelector("input").addEventListener("input", (e) => {
+      const v = Math.max(1, Math.min(4, parseInt(e.target.value || "1", 10)));
+      entry.count = v;
+      updateCostEstimate();
+    });
+    row.querySelector("button").addEventListener("click", () => {
+      SELECTED_TEMPLATES.delete(id);
+      renderTemplateGroups();
+      renderSelectedPanel();
+      renderGeneratePanel();
+    });
+    list.appendChild(row);
+  }
+  updateCostEstimate();
+}
+
+// ---------------- 生成面板：0 / 1 / 多选 三种状态 ----------------
+function renderGeneratePanel() {
+  const count = SELECTED_TEMPLATES.size;
+  const hint = $("generateHint");
+  const singleControls = $("singleTplControls");
+  const multiHint = $("multiTplHint");
+  const singleCountRow = $("singleCountRow");
+
+  singleCountRow.classList.toggle("hidden", count !== 0);
+  multiHint.classList.toggle("hidden", count <= 1);
+  singleControls.classList.toggle("hidden", count > 1);
+
+  if (count === 0) {
+    hint.textContent = "未选择任何套图模板 —— 可直接自定义全部提示词字段生成一张。";
+  } else if (count === 1) {
+    const t = [...SELECTED_TEMPLATES.values()][0].template;
+    hint.textContent = `已选模板：${t.name}${t.is_system ? "（系统模板，只读）" : ""}`;
+  } else {
+    hint.textContent = `已选择 ${count} 个套图。`;
+  }
+
   renderFieldsEditor();
   updateCostEstimate();
 }
 
-// ---------------- fields editor ----------------
 $("useAsIsChk").addEventListener("change", renderFieldsEditor);
 $("saveAsTplChk").addEventListener("change", () => {
-  $("saveTplName").classList.toggle("hidden", !$("saveAsTplChk").checked);
+  const show = $("saveAsTplChk").checked;
+  $("saveTplName").classList.toggle("hidden", !show);
+  if (show) {
+    const suggestion = computeSuggestedName();
+    if (!$("saveTplName").value || $("saveTplName").value === AUTO_SUGGESTED_NAME) {
+      $("saveTplName").value = suggestion;
+    }
+    AUTO_SUGGESTED_NAME = suggestion;
+  }
 });
 
+function computeSuggestedName() {
+  let season = "", product = "", scene = "", region = "";
+  if (SELECTED_TEMPLATES.size === 1) {
+    const t = [...SELECTED_TEMPLATES.values()][0].template;
+    season = t.season; product = t.product; scene = t.scene; region = t.region;
+  } else {
+    season = [...SELECTED_FILTERS.season][0] || "";
+    product = [...SELECTED_FILTERS.product][0] || "";
+    scene = [...SELECTED_FILTERS.scene][0] || "";
+    region = [...SELECTED_FILTERS.region][0] || "";
+  }
+  return [season, product, scene, region].filter(Boolean).join("-");
+}
+
 function renderFieldsEditor() {
-  const useAsIs = $("useAsIsChk").checked;
+  const count = SELECTED_TEMPLATES.size;
+  const useAsIsRow = document.getElementById("useAsIsChk").parentElement;
+
+  if (count === 1) {
+    useAsIsRow.classList.remove("hidden");
+  } else {
+    useAsIsRow.classList.add("hidden");
+  }
+
+  const useAsIs = count === 1 && $("useAsIsChk").checked;
+  const base = count === 1 ? [...SELECTED_TEMPLATES.values()][0].template : {};
+
   const container = $("fieldsEditor");
   container.innerHTML = "";
-  const base = SELECTED_TEMPLATE || {};
-
   FIELD_DEFS.forEach(([key, label]) => {
     const wrap = document.createElement("div");
     const lbl = document.createElement("label");
@@ -221,7 +405,7 @@ function renderFieldsEditor() {
     const ta = document.createElement("textarea");
     ta.id = "field_" + key;
     ta.value = base[key] || "";
-    ta.disabled = useAsIs && !!SELECTED_TEMPLATE;
+    ta.disabled = useAsIs;
     wrap.appendChild(lbl);
     wrap.appendChild(ta);
     container.appendChild(wrap);
@@ -243,11 +427,20 @@ $("imageInput").addEventListener("change", (e) => {
 
 $("genCount").addEventListener("input", updateCostEstimate);
 
+function totalPlannedCount() {
+  if (SELECTED_TEMPLATES.size === 0) {
+    return Math.max(1, Math.min(4, parseInt($("genCount").value || "1", 10)));
+  }
+  let total = 0;
+  for (const entry of SELECTED_TEMPLATES.values()) total += entry.count;
+  return total;
+}
+
 function updateCostEstimate() {
   if (!ME) return;
-  const n = Math.max(1, Math.min(4, parseInt($("genCount").value || "1", 10)));
+  const n = totalPlannedCount();
   const cost = (ME.cost_per_image * n).toFixed(2);
-  $("costEstimate").textContent = `预计花费 ${cost}（每张 ${ME.cost_per_image}）`;
+  $("costEstimate").textContent = `本次共 ${n} 张，预计花费 ${cost}（每张 ${ME.cost_per_image}）`;
 }
 
 // ---------------- generate ----------------
@@ -259,27 +452,60 @@ $("generateBtn").addEventListener("click", async () => {
     return;
   }
 
-  const fd = new FormData();
-  UPLOAD_FILES.forEach((f) => fd.append("images", f));
-  if (SELECTED_TEMPLATE) fd.append("template_id", SELECTED_TEMPLATE.id);
-  fd.append("use_template_as_is", $("useAsIsChk").checked);
-  fd.append("n", $("genCount").value || "1");
-  fd.append("save_as_template", $("saveAsTplChk").checked);
-  if ($("saveAsTplChk").checked) fd.append("template_name", $("saveTplName").value || "");
+  const imgParams = {
+    size: $("imgSize").value,
+    quality: $("imgQuality").value,
+    output_format: $("imgFormat").value,
+    background: $("imgBackground").value,
+  };
 
-  if (!$("useAsIsChk").checked) {
-    FIELD_DEFS.forEach(([key]) => fd.append(key, $("field_" + key).value || ""));
+  const tasks = [];
+  if (SELECTED_TEMPLATES.size === 0) {
+    tasks.push({ templateId: null, useAsIs: false, n: parseInt($("genCount").value || "1", 10), customFields: true });
+  } else if (SELECTED_TEMPLATES.size === 1) {
+    const [id, entry] = [...SELECTED_TEMPLATES.entries()][0];
+    tasks.push({ templateId: id, useAsIs: $("useAsIsChk").checked, n: entry.count, customFields: !$("useAsIsChk").checked });
+  } else {
+    for (const [id, entry] of SELECTED_TEMPLATES) {
+      tasks.push({ templateId: id, useAsIs: true, n: entry.count, customFields: false });
+    }
   }
 
   $("generateBtn").disabled = true;
   $("generateLoading").classList.remove("hidden");
+  const completedJobs = [];
   try {
-    const job = await API.generate(fd);
+    for (const task of tasks) {
+      const fd = new FormData();
+      UPLOAD_FILES.forEach((f) => fd.append("images", f));
+      if (task.templateId) fd.append("template_id", task.templateId);
+      fd.append("use_template_as_is", task.useAsIs);
+      fd.append("n", task.n);
+      fd.append("img_size", imgParams.size);
+      fd.append("img_quality", imgParams.quality);
+      fd.append("img_output_format", imgParams.output_format);
+      fd.append("img_background", imgParams.background);
+
+      if (tasks.length === 1) {
+        fd.append("save_as_template", $("saveAsTplChk").checked);
+        if ($("saveAsTplChk").checked) fd.append("template_name", $("saveTplName").value || "");
+      }
+
+      if (task.customFields) {
+        FIELD_DEFS.forEach(([key]) => fd.append(key, $("field_" + key).value || ""));
+      }
+
+      const job = await API.generate(fd);
+      completedJobs.push(job);
+    }
+
     await loadMe();
     await loadHistory();
-    await renderResult(job);
-    if (job.status === "failed") {
-      $("generateError").textContent = "生成失败：" + job.error_message;
+    await renderResults(completedJobs);
+
+    const failed = completedJobs.filter((j) => j.status === "failed");
+    if (failed.length) {
+      $("generateError").textContent = `${failed.length} 个生成任务失败：` + failed.map((j) => j.error_message).join("; ");
       $("generateError").classList.remove("hidden");
     }
   } catch (err) {
@@ -291,16 +517,18 @@ $("generateBtn").addEventListener("click", async () => {
   }
 });
 
-async function renderResult(job) {
+async function renderResults(jobs) {
   $("resultPanel").classList.remove("hidden");
   const grid = $("resultGrid");
   grid.innerHTML = "";
-  for (let i = 0; i < job.output_images.length; i++) {
-    const url = await imageBlobUrl(job.id, i);
-    const card = document.createElement("div");
-    card.className = "gen-card";
-    card.innerHTML = `<img src="${url}" /><div class="meta">第 ${i + 1} 张 · 成本 ${(job.cost / job.output_images.length).toFixed(2)}</div>`;
-    grid.appendChild(card);
+  for (const job of jobs) {
+    for (let i = 0; i < job.output_images.length; i++) {
+      const url = await imageBlobUrl(job.id, i);
+      const card = document.createElement("div");
+      card.className = "gen-card";
+      card.innerHTML = `<img src="${url}" /><div class="meta">第 ${i + 1} 张 · 成本 ${(job.cost / job.output_images.length).toFixed(2)}</div>`;
+      grid.appendChild(card);
+    }
   }
   $("resultPanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }

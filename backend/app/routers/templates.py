@@ -35,20 +35,51 @@ def _to_out(t: models.Template, user: models.User) -> schemas.TemplateOut:
     )
 
 
+def _visible_query(db: Session, user: models.User, mine_only: bool):
+    q = db.query(models.Template)
+    if mine_only:
+        q = q.filter(models.Template.owner_id == user.id)
+    else:
+        q = q.filter(or_(models.Template.is_system == True, models.Template.owner_id == user.id))  # noqa: E712
+    return q
+
+
+def _apply_filters(q, season=None, scene=None, product=None, region=None):
+    if season:
+        q = q.filter(models.Template.season.in_(season))
+    if scene:
+        q = q.filter(models.Template.scene.in_(scene))
+    if product:
+        q = q.filter(models.Template.product.in_(product))
+    if region:
+        q = q.filter(models.Template.region.in_(region))
+    return q
+
+
 @router.get("/filters", response_model=schemas.TemplateFilterOptions)
-def filter_options(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    q = db.query(models.Template).filter(
-        or_(models.Template.is_system == True, models.Template.owner_id == user.id)  # noqa: E712
-    )
-    templates = q.all()
-    def uniq(vals):
-        return sorted({v for v in vals if v})
+def filter_options(
+    season: Optional[List[str]] = Query(None),
+    scene: Optional[List[str]] = Query(None),
+    product: Optional[List[str]] = Query(None),
+    region: Optional[List[str]] = Query(None),
+    mine_only: bool = False,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Cascading / faceted filter options: each dimension's returned values are
+    computed against the OTHER already-selected dimensions, so picking a
+    season narrows down the product list, picking season+product narrows the
+    scene/detail list, and so on -- matching 先选季节->读取产品->场景/细节->区域."""
+
+    def uniq_field(col, **exclude_filters):
+        q = _apply_filters(_visible_query(db, user, mine_only), **exclude_filters)
+        return sorted({v for (v,) in q.with_entities(col).all() if v})
 
     return schemas.TemplateFilterOptions(
-        seasons=uniq(t.season for t in templates),
-        scenes=uniq(t.scene for t in templates),
-        products=uniq(t.product for t in templates),
-        regions=uniq(t.region for t in templates),
+        seasons=uniq_field(models.Template.season, scene=scene, product=product, region=region),
+        products=uniq_field(models.Template.product, season=season, scene=scene, region=region),
+        scenes=uniq_field(models.Template.scene, season=season, product=product, region=region),
+        regions=uniq_field(models.Template.region, season=season, product=product, scene=scene),
     )
 
 
@@ -62,22 +93,8 @@ def list_templates(
     user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    q = db.query(models.Template)
-    if mine_only:
-        q = q.filter(models.Template.owner_id == user.id)
-    else:
-        q = q.filter(or_(models.Template.is_system == True, models.Template.owner_id == user.id))  # noqa: E712
-
-    if season:
-        q = q.filter(models.Template.season.in_(season))
-    if scene:
-        q = q.filter(models.Template.scene.in_(scene))
-    if product:
-        q = q.filter(models.Template.product.in_(product))
-    if region:
-        q = q.filter(models.Template.region.in_(region))
-
-    templates = q.order_by(models.Template.is_system.desc(), models.Template.id).all()
+    q = _apply_filters(_visible_query(db, user, mine_only), season=season, scene=scene, product=product, region=region)
+    templates = q.order_by(models.Template.season, models.Template.product, models.Template.is_system.desc(), models.Template.id).all()
     return [_to_out(t, user) for t in templates]
 
 

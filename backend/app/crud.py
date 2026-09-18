@@ -15,6 +15,8 @@ def get_or_create_global_config(db: Session) -> models.GlobalConfig:
             id=1,
             default_cost_per_image=settings.DEFAULT_COST_PER_IMAGE,
             default_daily_quota=settings.DEFAULT_DAILY_QUOTA,
+            remote_relay_base_url=settings.REMOTE_RELAY_BASE_URL,
+            remote_relay_api_key=settings.REMOTE_RELAY_API_KEY,
         )
         db.add(cfg)
         db.commit()

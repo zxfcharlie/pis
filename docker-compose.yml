@@ -15,11 +15,11 @@ services:
       - DEFAULT_DAILY_QUOTA=${DEFAULT_DAILY_QUOTA:-50}
       - IMAGE_EXPIRE_DAYS=${IMAGE_EXPIRE_DAYS:-15}
       - CLEANUP_INTERVAL_HOURS=${CLEANUP_INTERVAL_HOURS:-6}
-      # Leave OPENAI_API_KEY empty to run in placeholder-image demo mode.
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      - IMAGE_GEN_MODEL=${IMAGE_GEN_MODEL:-gpt-image-1}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.anthropic.com/v1}
+      # Leave these empty to run in placeholder-image demo mode. Both can also
+      # be set later from the admin panel (设置 -> 中转访问) without redeploying.
+      - REMOTE_RELAY_BASE_URL=${REMOTE_RELAY_BASE_URL:-}
+      - REMOTE_RELAY_API_KEY=${REMOTE_RELAY_API_KEY:-}
+      - IMAGE_GEN_MODEL=${IMAGE_GEN_MODEL:-gpt-image-2}
+      - CHAT_MODEL=${CHAT_MODEL:-claude-sonnet-4-6}
       - RELAY_PUBLIC_BASE_URL=${RELAY_PUBLIC_BASE_URL:-https://dailybonushub.com}
     restart: unless-stopped

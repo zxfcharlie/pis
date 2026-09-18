@@ -55,6 +55,8 @@ def get_current_user(
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user:
         raise unauthorized
+    if not user.is_approved:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号正在等待管理员审核")
     return user
 
 

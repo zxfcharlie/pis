@@ -27,6 +27,7 @@ class User(Base):
     username = Column(String(64), unique=True, index=True, nullable=False)
     password_hash = Column(String(256), nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
+    is_approved = Column(Boolean, default=False, nullable=False)  # registration needs admin approval
 
     daily_quota = Column(Float, nullable=False)  # max $ spend / day, admin-editable
     cost_per_image = Column(Float, nullable=False)  # $ cost charged per generated image
@@ -112,6 +113,12 @@ class GlobalConfig(Base):
     id = Column(Integer, primary_key=True, default=1)
     default_cost_per_image = Column(Float, default=0.3)
     default_daily_quota = Column(Float, default=50.0)
+
+    # Upstream image/chat generation now goes through an existing remote relay
+    # service (the user's own ai-relay project) instead of holding raw
+    # OpenAI/Anthropic keys here. Admin sets these from the admin settings page.
+    remote_relay_base_url = Column(String(300), default="")  # e.g. http://<server>:8511/v1
+    remote_relay_api_key = Column(String(200), default="")   # rk-xxxx issued by that relay
 
 
 class RelayUsageLog(Base):

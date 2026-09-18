@@ -21,6 +21,13 @@ class TokenOut(BaseModel):
     token_type: str = "bearer"
 
 
+class RegisterOut(BaseModel):
+    status: str  # "active" | "pending"
+    message: str
+    access_token: Optional[str] = None
+    token_type: str = "bearer"
+
+
 class MeOut(BaseModel):
     id: int
     username: str
@@ -124,6 +131,7 @@ class AdminUserOut(BaseModel):
     id: int
     username: str
     is_admin: bool
+    is_approved: bool
     daily_quota: float
     cost_per_image: float
     used_today: float
@@ -139,16 +147,21 @@ class AdminUserUpdateIn(BaseModel):
     daily_quota: Optional[float] = None
     cost_per_image: Optional[float] = None
     is_admin: Optional[bool] = None
+    is_approved: Optional[bool] = None
 
 
 class AdminConfigOut(BaseModel):
     default_cost_per_image: float
     default_daily_quota: float
+    remote_relay_base_url: str
+    remote_relay_api_key: str
 
 
 class AdminConfigUpdateIn(BaseModel):
     default_cost_per_image: Optional[float] = None
     default_daily_quota: Optional[float] = None
+    remote_relay_base_url: Optional[str] = None
+    remote_relay_api_key: Optional[str] = None
 
 
 class AdminStatsOut(BaseModel):

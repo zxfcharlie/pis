@@ -2,20 +2,18 @@
 Turns a template's prompt fields + 1-2 uploaded product photos into generated
 product photo-set image(s).
 
-By default this calls OpenAI's image-edit endpoint (`IMAGE_GEN_MODEL`, e.g.
-gpt-image-1) with the uploaded product photos as reference images. Swap
-`_call_openai_image_edit` for whichever image model you actually have access
-to (Midjourney via a bridge, a Claude/Gemini image tool, an internal diffusion
-service, etc.) -- the rest of the app only depends on `generate_images()`'s
-signature.
+This calls out to an existing remote relay service (the user's own ai-relay
+project, OpenAI-SDK compatible) at `{relay_base_url}/images/edits`, passing
+size / quality / n / output_format / background exactly as OpenAI's Images
+API expects. The relay is configured by the admin (base URL + rk-... key,
+see /api/admin/config) -- this app never holds a raw OpenAI/Anthropic key.
 
-If OPENAI_API_KEY is not configured, a local placeholder image is rendered
-instead (via Pillow) so the whole app is runnable and demoable without any
-upstream key.
+If no relay is configured (or the call fails), a local placeholder image is
+rendered instead (via Pillow) so the whole app stays runnable/demoable.
 """
 import io
 import logging
-from typing import List
+from typing import List, Optional
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -35,6 +33,11 @@ FIELD_LABELS = [
     ("parameters", "参数"),
 ]
 
+VALID_SIZES = {"auto", "1024x1024", "1024x1536", "1536x1024"}
+VALID_QUALITY = {"auto", "low", "medium", "high"}
+VALID_FORMAT = {"png", "jpeg", "webp"}
+VALID_BACKGROUND = {"auto", "transparent", "opaque"}
+
 
 def compose_prompt(fields: dict) -> str:
     blocks = []
@@ -45,18 +48,33 @@ def compose_prompt(fields: dict) -> str:
     return "\n\n".join(blocks)
 
 
-def _size_from_parameters(parameters: str) -> str:
+def size_from_parameters(parameters: str) -> str:
+    """Best-effort mapping from our template's `--ar x:y` convention to an
+    OpenAI Images size string, used only when the caller doesn't pass an
+    explicit `size`."""
     parameters = parameters or ""
     if "4:5" in parameters:
         return "1024x1536"
     if "16:9" in parameters:
         return "1536x1024"
-    return "1024x1024"
+    if "1:1" in parameters:
+        return "1024x1024"
+    return "auto"
 
 
-def _call_openai_image_edit(input_images: List[bytes], prompt: str, size: str, n: int) -> List[bytes]:
-    url = f"{settings.OPENAI_BASE_URL}/images/edits"
-    headers = {"Authorization": f"Bearer {settings.OPENAI_API_KEY}"}
+def _call_relay_image_edit(
+    relay_base_url: str,
+    relay_api_key: str,
+    input_images: List[bytes],
+    prompt: str,
+    size: str,
+    quality: str,
+    n: int,
+    output_format: str,
+    background: str,
+) -> List[bytes]:
+    url = f"{relay_base_url.rstrip('/')}/images/edits"
+    headers = {"Authorization": f"Bearer {relay_api_key}"}
     files = [
         ("image[]", (f"ref_{i}.png", img, "image/png")) for i, img in enumerate(input_images)
     ]
@@ -64,7 +82,10 @@ def _call_openai_image_edit(input_images: List[bytes], prompt: str, size: str, n
         "model": settings.IMAGE_GEN_MODEL,
         "prompt": prompt,
         "size": size,
+        "quality": quality,
         "n": str(n),
+        "output_format": output_format,
+        "background": background,
     }
     resp = requests.post(url, headers=headers, files=files, data=data, timeout=180)
     resp.raise_for_status()
@@ -84,6 +105,8 @@ def _call_openai_image_edit(input_images: List[bytes], prompt: str, size: str, n
 
 
 def _placeholder_image(prompt: str, size: str) -> bytes:
+    if size == "auto" or "x" not in size:
+        size = "1024x1024"
     w, h = (int(x) for x in size.split("x"))
     img = Image.new("RGB", (w, h), color=(30, 34, 45))
     draw = ImageDraw.Draw(img)
@@ -93,10 +116,7 @@ def _placeholder_image(prompt: str, size: str) -> bytes:
         font = None
 
     margin = 24
-    text = (
-        "[未配置 OPENAI_API_KEY，以下为占位图]\n\n" + prompt
-    )
-    # naive manual word-wrap
+    text = "[未配置中转服务，以下为占位图]\n\n" + prompt
     max_chars = max(10, (w - 2 * margin) // 7)
     lines = []
     for raw_line in text.split("\n"):
@@ -116,19 +136,35 @@ def _placeholder_image(prompt: str, size: str) -> bytes:
     return buf.getvalue()
 
 
-def generate_images(input_images: List[bytes], prompt_fields: dict, n: int = 1) -> List[bytes]:
+def generate_images(
+    input_images: List[bytes],
+    prompt_fields: dict,
+    n: int = 1,
+    relay_base_url: str = "",
+    relay_api_key: str = "",
+    size: Optional[str] = None,
+    quality: str = "auto",
+    output_format: str = "png",
+    background: str = "auto",
+) -> List[bytes]:
     prompt = compose_prompt(prompt_fields)
-    size = _size_from_parameters(prompt_fields.get("parameters", ""))
 
-    if not settings.OPENAI_API_KEY:
-        logger.warning("OPENAI_API_KEY not set - returning placeholder image(s)")
+    size = size if size in VALID_SIZES else size_from_parameters(prompt_fields.get("parameters", ""))
+    quality = quality if quality in VALID_QUALITY else "auto"
+    output_format = output_format if output_format in VALID_FORMAT else "png"
+    background = background if background in VALID_BACKGROUND else "auto"
+
+    if not relay_base_url or not relay_api_key:
+        logger.warning("remote relay not configured - returning placeholder image(s)")
         return [_placeholder_image(prompt, size) for _ in range(n)]
 
     try:
-        images = _call_openai_image_edit(input_images, prompt, size, n)
+        images = _call_relay_image_edit(
+            relay_base_url, relay_api_key, input_images, prompt, size, quality, n, output_format, background
+        )
         if not images:
-            raise RuntimeError("upstream returned no images")
+            raise RuntimeError("上游未返回任何图片")
         return images
     except Exception:
-        logger.exception("image generation upstream call failed, falling back to placeholder")
-        return [_placeholder_image(prompt + "\n\n[上游生成失败，已回退为占位图]", size) for _ in range(n)]
+        logger.exception("image generation via remote relay failed, falling back to placeholder")
+        return [_placeholder_image(prompt + "\n\n[中转服务调用失败，已回退为占位图]", size) for _ in range(n)]

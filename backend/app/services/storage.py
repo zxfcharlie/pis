@@ -83,15 +83,59 @@ def cleanup_expired(db: Session) -> int:
     return count
 
 
-def build_zip(job_paths: List[List[str]], job_ids: List[int]) -> bytes:
-    """job_paths[i] is the list of relative output-image paths for job_ids[i]."""
+def build_zip_by_batch(jobs: List[dict]) -> bytes:
+    """jobs: list of {"batch_id": str, "created_at": datetime, "output_paths": List[str]}.
+    All images belonging to the same batch_id land together in ONE folder
+    (numbered sequentially), instead of one subfolder per job/template --
+    that's the whole point of a "batch"."""
+    from collections import defaultdict
+
+    grouped = defaultdict(list)
+    for j in jobs:
+        grouped[j["batch_id"]].append(j)
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for job_id, rel_paths in zip(job_ids, job_paths):
-            for rel in rel_paths:
-                p = abs_generated_path(rel)
-                if p.exists():
-                    arcname = f"job_{job_id}/{p.name}"
-                    zf.write(p, arcname)
+        for batch_id, items in grouped.items():
+            items.sort(key=lambda x: x["created_at"])
+            label = items[0]["created_at"].strftime("%Y%m%d_%H%M%S") + "_" + (batch_id or "batch")[:8]
+            counter = 1
+            for item in items:
+                for rel in item["output_paths"]:
+                    p = abs_generated_path(rel)
+                    if p.exists():
+                        arcname = f"{label}/{counter:02d}{p.suffix}"
+                        zf.write(p, arcname)
+                        counter += 1
     buf.seek(0)
     return buf.read()
+
+
+# ---------------- 二创套图模板背景图 (图1) ----------------
+
+def remix_background_dir() -> Path:
+    d = settings.DATA_DIR / "remix_backgrounds"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def save_remix_background(content: bytes, ext: str = "png") -> str:
+    """Returns a path relative to remix_background_dir()."""
+    import uuid
+
+    fname = f"{uuid.uuid4().hex}.{ext}"
+    (remix_background_dir() / fname).write_bytes(content)
+    return fname
+
+
+def abs_remix_background_path(rel_path: str) -> Path:
+    return remix_background_dir() / rel_path
+
+
+def delete_remix_background(rel_path: str):
+    p = abs_remix_background_path(rel_path)
+    if p.exists():
+        try:
+            p.unlink()
+        except Exception:
+            logger.exception("failed to remove remix background %s", rel_path)

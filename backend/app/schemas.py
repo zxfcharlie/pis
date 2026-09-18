@@ -102,11 +102,20 @@ class TemplateFilterOptions(BaseModel):
     regions: List[str]
 
 
+class AdminTemplateOut(TemplateOut):
+    """Extends TemplateOut with the extra columns only the admin table shows."""
+    owner_username: Optional[str] = None
+    usage_7d: int = 0
+    usage_30d: int = 0
+
+
 # ---------- Generation ----------
 
 class GenerationOut(BaseModel):
     id: int
-    template_id: Optional[int]
+    batch_id: str
+    template_id: Optional[int] = None
+    remix_template_id: Optional[int] = None
     prompt_snapshot: dict
     input_images: List[str]
     output_images: List[str]
@@ -122,7 +131,24 @@ class GenerationOut(BaseModel):
 
 
 class BatchDownloadIn(BaseModel):
-    ids: List[int]
+    batch_ids: List[str]
+
+
+# ---------- 二创套图模板 (remix templates) ----------
+
+class RemixTemplateOut(BaseModel):
+    id: int
+    owner_id: Optional[int]
+    is_system: bool
+    editable: bool
+    name: str
+    product: str
+    prompt: str
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
 
 
 # ---------- Admin ----------
@@ -153,15 +179,43 @@ class AdminUserUpdateIn(BaseModel):
 class AdminConfigOut(BaseModel):
     default_cost_per_image: float
     default_daily_quota: float
-    remote_relay_base_url: str
-    remote_relay_api_key: str
 
 
 class AdminConfigUpdateIn(BaseModel):
     default_cost_per_image: Optional[float] = None
     default_daily_quota: Optional[float] = None
-    remote_relay_base_url: Optional[str] = None
-    remote_relay_api_key: Optional[str] = None
+
+
+# ---------- Relay providers (switchable API upstreams) ----------
+
+class RelayProviderOut(BaseModel):
+    id: int
+    name: str
+    kind: str
+    base_url: str
+    api_key: str
+    image_model: str
+    is_active: bool
+    created_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RelayProviderCreateIn(BaseModel):
+    name: str
+    kind: str = "sync_edit"  # "sync_edit" | "toapis_async"
+    base_url: str
+    api_key: str
+    image_model: str = "gpt-image-2"
+
+
+class RelayProviderUpdateIn(BaseModel):
+    name: Optional[str] = None
+    kind: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    image_model: Optional[str] = None
 
 
 class AdminStatsOut(BaseModel):
@@ -171,3 +225,14 @@ class AdminStatsOut(BaseModel):
     today_generations: int
     today_cost: float
     per_user: List[AdminUserOut]
+
+
+# ---------- Product-based permissions ----------
+
+class UserProductAccessOut(BaseModel):
+    user_id: int
+    products: List[str]  # empty list = unrestricted (sees every product)
+
+
+class UserProductAccessSetIn(BaseModel):
+    products: List[str]  # full replacement set; empty list = clear restriction (unrestricted)

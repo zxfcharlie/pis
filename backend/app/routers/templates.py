@@ -41,7 +41,17 @@ def _visible_query(db: Session, user: models.User, mine_only: bool):
         q = q.filter(models.Template.owner_id == user.id)
     else:
         q = q.filter(or_(models.Template.is_system == True, models.Template.owner_id == user.id))  # noqa: E712
+    allowed = crud.get_allowed_products(db, user)
+    if allowed is not None:
+        q = q.filter(models.Template.product.in_(allowed))
     return q
+
+
+def _usable(db: Session, user: models.User, t: models.Template) -> bool:
+    if not crud.template_visible_to(user, t):
+        return False
+    allowed = crud.get_allowed_products(db, user)
+    return allowed is None or t.product in allowed
 
 
 def _apply_filters(q, season=None, scene=None, product=None, region=None):
@@ -101,7 +111,7 @@ def list_templates(
 @router.get("/{template_id}", response_model=schemas.TemplateOut)
 def get_template(template_id: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     t = db.query(models.Template).filter(models.Template.id == template_id).first()
-    if not t or not crud.template_visible_to(user, t):
+    if not t or not _usable(db, user, t):
         raise HTTPException(status_code=404, detail="模板不存在")
     return _to_out(t, user)
 

@@ -72,17 +72,55 @@ const API = (() => {
     deleteTemplate: (id) => request(`/api/templates/${id}`, { method: "DELETE" }),
 
     generate: (formData) => request("/api/generate", { method: "POST", body: formData, isForm: true }),
+    generateRemix: (formData) => request("/api/generate/remix", { method: "POST", body: formData, isForm: true }),
     listGenerations: (page = 1) => request(`/api/generations?page=${page}&page_size=20`),
-    batchDownload: (ids) => request("/api/generations/batch-download", { method: "POST", body: { ids } }),
+    batchDownload: (batchIds) => request("/api/generations/batch-download", { method: "POST", body: { batch_ids: batchIds } }),
+
+    // ---- 二创套图模板 ----
+    remixFilters: (params = {}) => {
+      const qs = new URLSearchParams();
+      if (params.mine_only) qs.append("mine_only", "true");
+      return request("/api/remix-templates/filters?" + qs.toString());
+    },
+    listRemixTemplates: (params = {}) => {
+      const qs = new URLSearchParams();
+      (params.product || []).forEach((v) => qs.append("product", v));
+      if (params.mine_only) qs.append("mine_only", "true");
+      return request("/api/remix-templates?" + qs.toString());
+    },
+    getRemixTemplate: (id) => request(`/api/remix-templates/${id}`),
+    remixBackgroundImageUrl: (id) => `/api/remix-templates/${id}/background-image`,
+    createRemixTemplate: (formData) => request("/api/remix-templates", { method: "POST", body: formData, isForm: true }),
+    updateRemixTemplate: (id, formData) => request(`/api/remix-templates/${id}`, { method: "PUT", body: formData, isForm: true }),
+    deleteRemixTemplate: (id) => request(`/api/remix-templates/${id}`, { method: "DELETE" }),
 
     adminListUsers: () => request("/api/admin/users"),
     adminUpdateUser: (id, payload) => request(`/api/admin/users/${id}`, { method: "PUT", body: payload }),
     adminApproveUser: (id) => request(`/api/admin/users/${id}/approve`, { method: "POST" }),
     adminDeleteUser: (id) => request(`/api/admin/users/${id}`, { method: "DELETE" }),
-    adminAllTemplates: () => request("/api/admin/templates"),
+    adminAllTemplates: (params = {}) => {
+      const qs = new URLSearchParams();
+      (params.season || []).forEach((v) => qs.append("season", v));
+      (params.product || []).forEach((v) => qs.append("product", v));
+      if (params.owner) qs.append("owner", params.owner);
+      return request("/api/admin/templates?" + qs.toString());
+    },
+    adminAllRemixTemplates: () => request("/api/admin/remix-templates"),
     adminGetConfig: () => request("/api/admin/config"),
     adminUpdateConfig: (payload) => request("/api/admin/config", { method: "PUT", body: payload }),
     adminStats: () => request("/api/admin/stats"),
+
+    adminListProviders: () => request("/api/admin/providers"),
+    adminCreateProvider: (payload) => request("/api/admin/providers", { method: "POST", body: payload }),
+    adminUpdateProvider: (id, payload) => request(`/api/admin/providers/${id}`, { method: "PUT", body: payload }),
+    adminActivateProvider: (id) => request(`/api/admin/providers/${id}/activate`, { method: "POST" }),
+    adminDeleteProvider: (id) => request(`/api/admin/providers/${id}`, { method: "DELETE" }),
+    adminProviderModels: (id) => request(`/api/admin/providers/${id}/models`),
+
+    adminAllProducts: () => request("/api/admin/products"),
+    adminGetUserProductAccess: (userId) => request(`/api/admin/users/${userId}/product-access`),
+    adminSetUserProductAccess: (userId, products) =>
+      request(`/api/admin/users/${userId}/product-access`, { method: "PUT", body: { products } }),
   };
 })();
 

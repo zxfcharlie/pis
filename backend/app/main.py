@@ -9,8 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from . import models
 from .config import settings
 from .database import Base, SessionLocal, engine
-from .migrate import run_sqlite_migrations
-from .routers import admin, auth, generate, relay, templates
+from .migrate import migrate_legacy_relay_provider, run_sqlite_migrations
+from .routers import admin, auth, generate, relay, remix_templates, templates
 from .seed import seed_system_templates
 from .services.storage import cleanup_expired
 
@@ -29,6 +29,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(templates.router)
+app.include_router(remix_templates.router)
 app.include_router(generate.router)
 app.include_router(admin.router)
 app.include_router(relay.router)
@@ -43,6 +44,7 @@ def on_startup():
     db = SessionLocal()
     try:
         seed_system_templates(db)
+        migrate_legacy_relay_provider(db)
     finally:
         db.close()
 

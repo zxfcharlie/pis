@@ -30,7 +30,9 @@ OVERRIDE_KEYS = [
 def _job_to_out(job: models.GenerationJob) -> schemas.GenerationOut:
     return schemas.GenerationOut(
         id=job.id,
+        batch_id=job.batch_id or f"job-{job.id}",
         template_id=job.template_id,
+        remix_template_id=job.remix_template_id,
         prompt_snapshot=json.loads(job.prompt_snapshot_json or "{}"),
         input_images=json.loads(job.input_images_json or "[]"),
         output_images=json.loads(job.output_images_json or "[]"),
@@ -43,12 +45,21 @@ def _job_to_out(job: models.GenerationJob) -> schemas.GenerationOut:
     )
 
 
+def _template_usable(db: Session, user: models.User, template: models.Template) -> bool:
+    if not crud.template_visible_to(user, template):
+        return False
+    allowed = crud.get_allowed_products(db, user)
+    return allowed is None or template.product in allowed
+
+
 @router.post("/api/generate", response_model=schemas.GenerationOut)
 def generate(
     images: List[UploadFile] = File(...),
     template_id: Optional[int] = Form(None),
     use_template_as_is: bool = Form(True),
     n: int = Form(1),
+    batch_id: Optional[str] = Form(None),
+    model: Optional[str] = Form(None),
     save_as_template: bool = Form(False),
     template_name: Optional[str] = Form(None),
     # OpenAI Images API params, forwarded to the remote relay as-is
@@ -77,7 +88,7 @@ def generate(
     template = None
     if template_id is not None:
         template = db.query(models.Template).filter(models.Template.id == template_id).first()
-        if not template or not crud.template_visible_to(user, template):
+        if not template or not _template_usable(db, user, template):
             raise HTTPException(status_code=404, detail="模板不存在")
         base_fields = template.prompt_fields()
 
@@ -106,6 +117,8 @@ def generate(
     if crud.used_today(db, user.id) + projected_cost > user.daily_quota:
         raise HTTPException(status_code=403, detail="今日生成额度已用完，请明天再试或联系管理员调整额度")
 
+    provider = crud.get_active_provider(db)
+
     # read + persist input images
     input_rel_paths = []
     input_bytes_list = []
@@ -115,18 +128,19 @@ def generate(
         input_rel_paths.append(storage.save_upload_bytes(user.id, img.filename or "upload.png", content))
 
     job_token = uuid.uuid4().hex
+    effective_batch_id = batch_id or job_token  # a lone/manual generation is its own singleton batch
 
     try:
         output_images_bytes = image_gen.generate_images(
             input_bytes_list,
             final_fields,
             n=n,
-            relay_base_url=cfg.remote_relay_base_url or "",
-            relay_api_key=cfg.remote_relay_api_key or "",
+            provider=provider,
             size=img_size,
             quality=img_quality,
             output_format=img_output_format,
             background=img_background,
+            model=model,
         )
         status_str = "success"
         error_message = ""
@@ -146,6 +160,7 @@ def generate(
     job = models.GenerationJob(
         user_id=user.id,
         template_id=template.id if template else None,
+        batch_id=effective_batch_id,
         prompt_snapshot_json=json.dumps(final_fields, ensure_ascii=False),
         input_images_json=json.dumps(input_rel_paths, ensure_ascii=False),
         output_images_json=json.dumps(output_rel_paths, ensure_ascii=False),
@@ -177,7 +192,104 @@ def generate(
     return _job_to_out(job)
 
 
-@router.get("/api/generations", response_model=List[schemas.GenerationOut])
+@router.post("/api/generate/remix", response_model=List[schemas.GenerationOut])
+def generate_remix(
+    remix_template_id: int = Form(...),
+    images: List[UploadFile] = File(...),  # batch of product photos (图2), one output per photo
+    prompt_override: Optional[str] = Form(None),
+    model: Optional[str] = Form(None),
+    img_size: Optional[str] = Form("auto"),
+    img_quality: Optional[str] = Form("auto"),
+    img_output_format: Optional[str] = Form("png"),
+    img_background: Optional[str] = Form("auto"),
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not (1 <= len(images) <= 20):
+        raise HTTPException(status_code=400, detail="请上传1-20张产品图，每张会各自生成一张结果")
+
+    tpl = db.query(models.RemixTemplate).filter(models.RemixTemplate.id == remix_template_id).first()
+    if not tpl:
+        raise HTTPException(status_code=404, detail="二创套图模板不存在")
+    if not crud.remix_visible_to(user, tpl):
+        raise HTTPException(status_code=404, detail="二创套图模板不存在")
+    allowed = crud.get_allowed_products(db, user)
+    if allowed is not None and tpl.product not in allowed:
+        raise HTTPException(status_code=404, detail="二创套图模板不存在")
+    if not tpl.background_image_path:
+        raise HTTPException(status_code=400, detail="该模板还没有设置图1，无法生成")
+
+    bg_path = storage.abs_remix_background_path(tpl.background_image_path)
+    if not bg_path.exists():
+        raise HTTPException(status_code=400, detail="模板的图1文件丢失，请联系管理员重新上传")
+    background_bytes = bg_path.read_bytes()
+
+    prompt_text = prompt_override.strip() if prompt_override and prompt_override.strip() else tpl.prompt
+
+    cfg = crud.get_or_create_global_config(db)
+    cost_per_image = user.cost_per_image or cfg.default_cost_per_image
+    projected_cost = cost_per_image * len(images)
+    if crud.used_today(db, user.id) + projected_cost > user.daily_quota:
+        raise HTTPException(status_code=403, detail="今日生成额度已用完，请明天再试或联系管理员调整额度")
+
+    provider = crud.get_active_provider(db)
+    batch_id = uuid.uuid4().hex
+    ext = img_output_format if img_output_format in ("png", "jpeg", "webp") else "png"
+    results = []
+
+    for img in images:
+        product_bytes = img.file.read()
+        input_rel_paths = [
+            storage.save_upload_bytes(user.id, "background_ref.png", background_bytes),
+            storage.save_upload_bytes(user.id, img.filename or "product.png", product_bytes),
+        ]
+        job_token = uuid.uuid4().hex
+        try:
+            output_images_bytes = image_gen.generate_images(
+                [background_bytes, product_bytes],
+                n=1,
+                provider=provider,
+                size=img_size,
+                quality=img_quality,
+                output_format=img_output_format,
+                background=img_background,
+                model=model,
+                raw_prompt=prompt_text,
+            )
+            status_str = "success"
+            error_message = ""
+        except Exception as e:  # pragma: no cover - defensive
+            output_images_bytes = []
+            status_str = "failed"
+            error_message = str(e)
+
+        output_rel_paths = (
+            storage.save_generated_images(user.id, job_token, output_images_bytes, ext=ext)
+            if output_images_bytes
+            else []
+        )
+        actual_cost = cost_per_image * len(output_rel_paths)
+
+        job = models.GenerationJob(
+            user_id=user.id,
+            remix_template_id=tpl.id,
+            batch_id=batch_id,
+            prompt_snapshot_json=json.dumps({"prompt": prompt_text}, ensure_ascii=False),
+            input_images_json=json.dumps(input_rel_paths, ensure_ascii=False),
+            output_images_json=json.dumps(output_rel_paths, ensure_ascii=False),
+            image_count=len(output_rel_paths),
+            cost=actual_cost,
+            status=status_str,
+            error_message=error_message,
+            created_at=datetime.datetime.utcnow(),
+            expire_at=datetime.datetime.utcnow() + datetime.timedelta(days=settings.IMAGE_EXPIRE_DAYS),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        results.append(_job_to_out(job))
+
+    return results
 def list_generations(
     page: int = 1,
     page_size: int = 20,
@@ -225,16 +337,22 @@ def get_generation_image(job_id: int, index: int, user: models.User = Depends(ge
 def batch_download(payload: schemas.BatchDownloadIn, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     jobs = (
         db.query(models.GenerationJob)
-        .filter(models.GenerationJob.id.in_(payload.ids))
+        .filter(models.GenerationJob.batch_id.in_(payload.batch_ids))
         .all()
     )
     jobs = [j for j in jobs if j.user_id == user.id or user.is_admin]
     if not jobs:
         raise HTTPException(status_code=404, detail="没有可下载的记录")
 
-    job_ids = [j.id for j in jobs]
-    job_paths = [json.loads(j.output_images_json or "[]") for j in jobs]
-    zip_bytes = storage.build_zip(job_paths, job_ids)
+    jobs_data = [
+        {
+            "batch_id": j.batch_id or f"job-{j.id}",
+            "created_at": j.created_at,
+            "output_paths": json.loads(j.output_images_json or "[]"),
+        }
+        for j in jobs
+    ]
+    zip_bytes = storage.build_zip_by_batch(jobs_data)
     return Response(
         content=zip_bytes,
         media_type="application/zip",

@@ -22,10 +22,10 @@ def get_relay_user(authorization: str = Header(None), db: Session = Depends(get_
 
 
 def _relay_config(db: Session):
-    cfg = crud.get_or_create_global_config(db)
-    if not cfg.remote_relay_base_url or not cfg.remote_relay_api_key:
-        raise HTTPException(status_code=503, detail="管理员尚未配置中转服务地址/密钥（设置 -> 中转访问）")
-    return cfg.remote_relay_base_url, cfg.remote_relay_api_key
+    provider = crud.get_active_provider(db)
+    if not provider or not provider.base_url or not provider.api_key:
+        raise HTTPException(status_code=503, detail="管理员尚未设置当前使用的 API 供应商（设置 -> API 供应商）")
+    return provider.base_url, provider.api_key
 
 
 @router.get("/models")

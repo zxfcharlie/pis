@@ -86,6 +86,16 @@ class GenerationJob(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     template_id = Column(Integer, ForeignKey("templates.id"), nullable=True)
+    remix_template_id = Column(Integer, ForeignKey("remix_templates.id"), nullable=True)  # 二创套图模板
+
+    # All jobs created by one click of "生成套图" share the same batch_id --
+    # even when that click fans out into several GenerationJob rows (one per
+    # selected template). Used to group the download/history UI so a batch
+    # downloads as one folder instead of one-folder-per-template. Always
+    # populated (server assigns one if the client doesn't send it); legacy
+    # rows from before this column existed are backfilled to their own
+    # singleton batch (see migrate.py).
+    batch_id = Column(String(64), index=True, nullable=True)
 
     # Snapshot of the exact prompt used, so later edits to the template (or its
     # deletion) never change the historical record of what was generated.
@@ -114,11 +124,78 @@ class GlobalConfig(Base):
     default_cost_per_image = Column(Float, default=0.3)
     default_daily_quota = Column(Float, default=50.0)
 
-    # Upstream image/chat generation now goes through an existing remote relay
-    # service (the user's own ai-relay project) instead of holding raw
-    # OpenAI/Anthropic keys here. Admin sets these from the admin settings page.
-    remote_relay_base_url = Column(String(300), default="")  # e.g. http://<server>:8511/v1
-    remote_relay_api_key = Column(String(200), default="")   # rk-xxxx issued by that relay
+    # Deprecated as of the multi-provider RelayProvider table below -- kept
+    # only so a one-time startup migration can carry an already-configured
+    # single relay forward into a RelayProvider row. Don't read/write these
+    # anywhere else.
+    remote_relay_base_url = Column(String(300), default="")
+    remote_relay_api_key = Column(String(200), default="")
+
+
+class RelayProvider(Base):
+    """One configured upstream (chat + image) relay. Multiple can be saved;
+    exactly one is `is_active` at a time -- that's the one actually used for
+    套图 generation and for this service's own /v1/* passthrough. Admin can
+    add/edit/switch from the admin panel at any time, no redeploy needed."""
+
+    __tablename__ = "relay_providers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    # "sync_edit"   -> OpenAI-style synchronous POST {base_url}/images/edits
+    #                  (multipart image[] fields, immediate image bytes/url back).
+    #                  This is what the user's own ai-relay project speaks.
+    # "toapis_async" -> ToAPIs-style: upload ref images to {base_url}/uploads/images
+    #                  first, POST {base_url}/images/generations (JSON,
+    #                  reference_images as URLs) to get a task id, then poll
+    #                  GET {base_url}/images/generations/{task_id} until
+    #                  completed/failed.
+    kind = Column(String(30), nullable=False, default="sync_edit")
+    base_url = Column(String(300), nullable=False)
+    api_key = Column(String(300), nullable=False)
+    image_model = Column(String(100), nullable=False, default="gpt-image-2")  # e.g. gpt-image-2, gemini-3-pro-image
+    is_active = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class RemixTemplate(Base):
+    """二创套图模板: composite a batch of uploaded product photos (图2) into
+    one preset background image (图1) that lives on the template itself, using
+    a single plain-text prompt instead of the 8-field structured prompt that
+    the regular Template uses. Naming convention (not enforced, just a UI
+    hint): "产品-描述", e.g. "产品-低角度-白底"."""
+
+    __tablename__ = "remix_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # null = system template
+    is_system = Column(Boolean, default=False, nullable=False)
+
+    name = Column(String(200), nullable=False)
+    product = Column(String(50), index=True, default="")  # also the permission-scoping dimension
+
+    background_image_path = Column(String(500), nullable=False, default="")  # 图1, relative to REMIX_BG_DIR
+    prompt = Column(Text, default="把上传的产品（图2）放到图1中")
+
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    owner = relationship("User")
+
+
+class UserProductAccess(Base):
+    """Grants a user permission to see/use templates (regular or 二创) for one
+    `product`. A user with zero rows here is unrestricted (sees every
+    product) -- this is an opt-in allowlist an admin applies per user, not a
+    default lockout, so upgrading never silently hides existing templates
+    from users who were already using them."""
+
+    __tablename__ = "user_product_access"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    product = Column(String(50), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 class RelayUsageLog(Base):

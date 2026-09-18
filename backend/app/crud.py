@@ -15,8 +15,6 @@ def get_or_create_global_config(db: Session) -> models.GlobalConfig:
             id=1,
             default_cost_per_image=settings.DEFAULT_COST_PER_IMAGE,
             default_daily_quota=settings.DEFAULT_DAILY_QUOTA,
-            remote_relay_base_url=settings.REMOTE_RELAY_BASE_URL,
-            remote_relay_api_key=settings.REMOTE_RELAY_API_KEY,
         )
         db.add(cfg)
         db.commit()
@@ -61,3 +59,56 @@ def template_editable_by(user: models.User, template: models.Template) -> bool:
     if template.is_system:
         return user.is_admin
     return template.owner_id == user.id or user.is_admin
+
+
+def get_active_provider(db: Session):
+    return db.query(models.RelayProvider).filter(models.RelayProvider.is_active == True).first()  # noqa: E712
+
+
+# ---------- 二创套图模板 (RemixTemplate) permission helpers -- shared shape with Template ----------
+
+def remix_visible_to(user: models.User, tpl: models.RemixTemplate) -> bool:
+    return tpl.is_system or tpl.owner_id == user.id or user.is_admin
+
+
+def remix_editable_by(user: models.User, tpl: models.RemixTemplate) -> bool:
+    if tpl.is_system:
+        return user.is_admin
+    return tpl.owner_id == user.id or user.is_admin
+
+
+# ---------- Product-based access control ----------
+
+def get_allowed_products(db: Session, user: models.User) -> "set[str] | None":
+    """None = unrestricted (sees every product). A non-empty set restricts the
+    user to exactly those products. Admins are always unrestricted."""
+    if user.is_admin:
+        return None
+    rows = db.query(models.UserProductAccess.product).filter(models.UserProductAccess.user_id == user.id).all()
+    products = {p for (p,) in rows}
+    return products or None
+
+
+def set_user_product_access(db: Session, user_id: int, products: list):
+    db.query(models.UserProductAccess).filter(models.UserProductAccess.user_id == user_id).delete()
+    for p in {p.strip() for p in products if p and p.strip()}:
+        db.add(models.UserProductAccess(user_id=user_id, product=p))
+    db.commit()
+
+
+# ---------- Template usage stats (for the admin template table) ----------
+
+def template_usage_counts(db: Session, since: datetime.datetime) -> dict:
+    """Returns {template_id: count} of successful GenerationJob rows created
+    on/after `since`."""
+    rows = (
+        db.query(models.GenerationJob.template_id, func.count(models.GenerationJob.id))
+        .filter(
+            models.GenerationJob.template_id.isnot(None),
+            models.GenerationJob.created_at >= since,
+            models.GenerationJob.status == "success",
+        )
+        .group_by(models.GenerationJob.template_id)
+        .all()
+    )
+    return {tid: count for tid, count in rows}

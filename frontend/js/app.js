@@ -61,6 +61,10 @@ function renderNav() {
   const nav = $("navArea");
   nav.innerHTML = "";
   if (API.isLoggedIn()) {
+    const remixLink = document.createElement("a");
+    remixLink.href = "/remix.html";
+    remixLink.textContent = "二创套图";
+    nav.appendChild(remixLink);
     if (ME && ME.is_admin) {
       const a = document.createElement("a");
       a.href = "/admin.html";
@@ -459,6 +463,11 @@ $("generateBtn").addEventListener("click", async () => {
     background: $("imgBackground").value,
   };
 
+  // Every job created by this one click of "生成套图" shares one batch id,
+  // even when it fans out into several API calls (one per selected
+  // template) -- so history/download can group them into one folder.
+  const batchId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ("b" + Date.now() + Math.random().toString(16).slice(2));
+
   const tasks = [];
   if (SELECTED_TEMPLATES.size === 0) {
     tasks.push({ templateId: null, useAsIs: false, n: parseInt($("genCount").value || "1", 10), customFields: true });
@@ -481,6 +490,7 @@ $("generateBtn").addEventListener("click", async () => {
       if (task.templateId) fd.append("template_id", task.templateId);
       fd.append("use_template_as_is", task.useAsIs);
       fd.append("n", task.n);
+      fd.append("batch_id", batchId);
       fd.append("img_size", imgParams.size);
       fd.append("img_quality", imgParams.quality);
       fd.append("img_output_format", imgParams.output_format);
@@ -543,49 +553,77 @@ async function imageBlobUrl(jobId, index) {
   return URL.createObjectURL(blob);
 }
 
-// ---------------- history ----------------
+// ---------------- history (grouped into batches -- one click of "生成套图" = one batch) ----------------
 async function loadHistory() {
   const jobs = await API.listGenerations(1);
+
+  // group while preserving the server's reverse-chronological order; jobs from
+  // the same batch were created back-to-back so they naturally cluster together
+  const batches = [];
+  const byId = new Map();
+  for (const job of jobs) {
+    if (!byId.has(job.batch_id)) {
+      const b = { batch_id: job.batch_id, jobs: [] };
+      byId.set(job.batch_id, b);
+      batches.push(b);
+    }
+    byId.get(job.batch_id).jobs.push(job);
+  }
+
   const grid = $("historyGrid");
   grid.innerHTML = "";
-  for (const job of jobs) {
+
+  for (const batch of batches) {
+    const firstJob = batch.jobs[0];
+    const totalImages = batch.jobs.reduce((s, j) => s + j.output_images.length, 0);
+    const totalCost = batch.jobs.reduce((s, j) => s + j.cost, 0);
+    const anyFailed = batch.jobs.some((j) => j.status === "failed");
+    const chosen = HISTORY_SELECTED.has(batch.batch_id);
+
     const card = document.createElement("div");
     card.className = "gen-card";
-    const chosen = HISTORY_SELECTED.has(job.id);
-    let imgHtml = '<div class="muted" style="padding:20px;text-align:center;">无图片</div>';
-    if (job.output_images.length) {
-      const url = await imageBlobUrl(job.id, 0);
-      imgHtml = `<img src="${url}" />`;
+    card.style.gridColumn = "span 2";
+
+    let thumbsHtml = '<div class="muted" style="padding:20px;text-align:center;">无图片</div>';
+    const thumbUrls = [];
+    for (const job of batch.jobs) {
+      for (let i = 0; i < job.output_images.length; i++) {
+        thumbUrls.push(await imageBlobUrl(job.id, i));
+        if (thumbUrls.length >= 8) break;
+      }
+      if (thumbUrls.length >= 8) break;
     }
+    if (thumbUrls.length) {
+      thumbsHtml = `<div class="thumb-list">${thumbUrls.map((u) => `<img src="${u}" />`).join("")}</div>`;
+    }
+
     card.innerHTML = `
-      ${imgHtml}
+      <div style="padding:10px;">${thumbsHtml}</div>
       <div class="meta">
         <label class="row" style="font-size:12px;">
-          <input type="checkbox" data-job="${job.id}" ${chosen ? "checked" : ""} /> 选择打包
+          <input type="checkbox" data-batch="${batch.batch_id}" ${chosen ? "checked" : ""} /> 选择打包（多批一起下载）
         </label>
-        <div>${new Date(job.created_at + "Z").toLocaleString()}</div>
-        <div>状态：${job.status === "success" ? "成功" : job.status === "failed" ? "失败" : "处理中"} · ${job.image_count}张 · ¥${job.cost.toFixed(2)}</div>
-        <div class="muted">${new Date(job.expire_at + "Z").toLocaleDateString()} 到期</div>
+        <div>${new Date(firstJob.created_at + "Z").toLocaleString()}</div>
+        <div>状态：${anyFailed ? "部分失败" : "成功"} · 共 ${totalImages} 张 · ¥${totalCost.toFixed(2)}</div>
+        <div class="muted">${new Date(firstJob.expire_at + "Z").toLocaleDateString()} 到期</div>
+        <button class="btn secondary" data-act="download-batch" style="margin-top:6px;padding:4px 10px;font-size:12px;">下载本批次</button>
       </div>
     `;
     card.querySelector("input[type=checkbox]").addEventListener("change", (e) => {
-      if (e.target.checked) HISTORY_SELECTED.add(job.id);
-      else HISTORY_SELECTED.delete(job.id);
+      if (e.target.checked) HISTORY_SELECTED.add(batch.batch_id);
+      else HISTORY_SELECTED.delete(batch.batch_id);
     });
+    card.querySelector('[data-act=download-batch]').addEventListener("click", () => downloadBatches([batch.batch_id]));
     grid.appendChild(card);
   }
 }
 
-$("downloadSelectedBtn").addEventListener("click", async () => {
-  if (HISTORY_SELECTED.size === 0) {
-    alert("请先勾选要下载的生成记录");
-    return;
-  }
+async function downloadBatches(batchIds) {
   const token = API.getToken();
   const resp = await fetch("/api/generations/batch-download", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-    body: JSON.stringify({ ids: [...HISTORY_SELECTED] }),
+    body: JSON.stringify({ batch_ids: batchIds }),
   });
   if (!resp.ok) {
     alert("下载失败");
@@ -598,6 +636,14 @@ $("downloadSelectedBtn").addEventListener("click", async () => {
   a.download = "generations.zip";
   a.click();
   URL.revokeObjectURL(url);
+}
+
+$("downloadSelectedBtn").addEventListener("click", () => {
+  if (HISTORY_SELECTED.size === 0) {
+    alert("请先勾选要下载的批次");
+    return;
+  }
+  downloadBatches([...HISTORY_SELECTED]);
 });
 
 // ---------------- utils ----------------

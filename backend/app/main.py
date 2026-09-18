@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from . import models
 from .config import settings
 from .database import Base, SessionLocal, engine
+from .migrate import run_sqlite_migrations
 from .routers import admin, auth, generate, relay, templates
 from .seed import seed_system_templates
 from .services.storage import cleanup_expired
@@ -38,6 +39,7 @@ scheduler = BackgroundScheduler()
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+    run_sqlite_migrations()
     db = SessionLocal()
     try:
         seed_system_templates(db)

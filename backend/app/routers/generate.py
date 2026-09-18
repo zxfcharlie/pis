@@ -290,6 +290,9 @@ def generate_remix(
         results.append(_job_to_out(job))
 
     return results
+
+
+@router.get("/api/generations", response_model=List[schemas.GenerationOut])
 def list_generations(
     page: int = 1,
     page_size: int = 20,

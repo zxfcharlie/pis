@@ -66,6 +66,13 @@
       </div>
     </div>
 
+    <div id="appLoadError" class="card hidden" style="border-color:var(--danger);">
+      <div class="row between">
+        <span class="error-msg" id="appLoadErrorMsg" style="margin:0;"></span>
+        <button class="btn secondary" id="appLoadRetryBtn" style="padding:4px 10px;font-size:12px;">重试</button>
+      </div>
+    </div>
+
     <div class="grid-2">
       <!-- 筛选面板：季节 -> 产品 -> 场景/细节 -> 区域，逐级展开 -->
       <div class="card" id="filterPanel">

@@ -30,19 +30,45 @@ async function init() {
     showAuth();
     return;
   }
+
+  // Phase 1: verify the session itself. Only a failure HERE means "not
+  // really logged in" and should bounce to the login screen.
   try {
     await loadMe();
-    showApp();
+  } catch (e) {
+    console.error("loadMe failed, treating as logged out:", e);
+    API.clearToken();
+    showAuth();
+    return;
+  }
+
+  showApp();
+  hideLoadError();
+
+  // Phase 2: load the page's data. The session is valid at this point, so a
+  // failure here (a flaky request, a backend bug, a transient network blip)
+  // should NOT bounce the user back to the login form -- just show what we
+  // can and surface the error inline.
+  try {
     await loadFilterOptions();
     await loadTemplates();
     await loadHistory();
     renderSelectedPanel();
     renderGeneratePanel();
   } catch (e) {
-    console.error(e);
-    showAuth();
+    console.error("failed to load app data:", e);
+    showLoadError(e.message || "加载数据失败，请重试");
   }
 }
+
+function showLoadError(msg) {
+  $("appLoadErrorMsg").textContent = "页面部分内容加载失败：" + msg;
+  $("appLoadError").classList.remove("hidden");
+}
+function hideLoadError() {
+  $("appLoadError").classList.add("hidden");
+}
+$("appLoadRetryBtn").addEventListener("click", init);
 
 function renderAuthState() {
   init();

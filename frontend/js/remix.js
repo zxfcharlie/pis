@@ -19,18 +19,28 @@ async function init() {
     renderNav();
     return;
   }
+
   try {
     await loadMe();
+  } catch (e) {
+    console.error("loadMe failed, treating as logged out:", e);
+    API.clearToken();
+    $("authGate").classList.remove("hidden");
+    $("remixView").classList.add("hidden");
     renderNav();
-    $("authGate").classList.add("hidden");
-    $("remixView").classList.remove("hidden");
+    return;
+  }
+
+  renderNav();
+  $("authGate").classList.add("hidden");
+  $("remixView").classList.remove("hidden");
+
+  try {
     await loadFilters();
     await loadTemplates();
     await loadHistory();
   } catch (e) {
-    console.error(e);
-    $("authGate").classList.remove("hidden");
-    $("remixView").classList.add("hidden");
+    console.error("failed to load remix page data:", e);
   }
 }
 

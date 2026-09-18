@@ -32,7 +32,11 @@ async function init() {
   }
   $("adminView").classList.remove("hidden");
 
-  await Promise.all([loadStats(), loadConfig(), loadProviders(), loadUsers(), loadProducts(), loadTemplates(), loadRemixTemplatesAdmin()]);
+  try {
+    await Promise.all([loadStats(), loadConfig(), loadProviders(), loadUsers(), loadProducts(), loadTemplates(), loadRemixTemplatesAdmin()]);
+  } catch (e) {
+    console.error("failed to load some admin panel data:", e);
+  }
 }
 
 async function loadStats() {

@@ -114,6 +114,8 @@ class AdminTemplateOut(TemplateOut):
 class GenerationOut(BaseModel):
     id: int
     batch_id: str
+    kind: str = "custom"  # "template" | "remix" | "custom"
+    product: str = ""
     template_id: Optional[int] = None
     remix_template_id: Optional[int] = None
     prompt_snapshot: dict

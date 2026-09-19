@@ -5,7 +5,7 @@ let SELECTED_FILTERS = { season: new Set(), product: new Set(), scene: new Set()
 let TEMPLATES = [];
 let SELECTED_TEMPLATES = new Map(); // id -> {template, count}
 let UPLOAD_FILES = [];
-let HISTORY_SELECTED = new Set();
+let LAST_BATCH_ID = null;
 let AUTO_SUGGESTED_NAME = "";
 
 const FIELD_DEFS = [
@@ -52,7 +52,6 @@ async function init() {
   try {
     await loadFilterOptions();
     await loadTemplates();
-    await loadHistory();
     renderSelectedPanel();
     renderGeneratePanel();
   } catch (e) {
@@ -91,6 +90,10 @@ function renderNav() {
     remixLink.href = "/remix.html";
     remixLink.textContent = "二创套图";
     nav.appendChild(remixLink);
+    const histLink = document.createElement("a");
+    histLink.href = "/history.html";
+    histLink.textContent = "生成历史";
+    nav.appendChild(histLink);
     if (ME && ME.is_admin) {
       const a = document.createElement("a");
       a.href = "/admin.html";
@@ -493,6 +496,7 @@ $("generateBtn").addEventListener("click", async () => {
   // even when it fans out into several API calls (one per selected
   // template) -- so history/download can group them into one folder.
   const batchId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ("b" + Date.now() + Math.random().toString(16).slice(2));
+  LAST_BATCH_ID = batchId;
 
   const tasks = [];
   if (SELECTED_TEMPLATES.size === 0) {
@@ -507,7 +511,17 @@ $("generateBtn").addEventListener("click", async () => {
   }
 
   $("generateBtn").disabled = true;
+  $("generateBtn").textContent = "生成中…";
   $("generateLoading").classList.remove("hidden");
+  $("genProgressBar").classList.remove("hidden");
+  const totalTasks = tasks.length;
+  let doneTasks = 0;
+  const updateProgress = () => {
+    const pct = totalTasks ? Math.round((doneTasks / totalTasks) * 100) : 0;
+    $("genProgressFill").style.width = pct + "%";
+    $("generateLoading").textContent = totalTasks > 1 ? `正在生成 ${doneTasks}/${totalTasks} 个套图…` : "正在生成，请稍候…";
+  };
+  updateProgress();
   const completedJobs = [];
   try {
     for (const task of tasks) {
@@ -533,10 +547,11 @@ $("generateBtn").addEventListener("click", async () => {
 
       const job = await API.generate(fd);
       completedJobs.push(job);
+      doneTasks++;
+      updateProgress();
     }
 
     await loadMe();
-    await loadHistory();
     await renderResults(completedJobs);
 
     const failed = completedJobs.filter((j) => j.status === "failed");
@@ -549,7 +564,9 @@ $("generateBtn").addEventListener("click", async () => {
     $("generateError").classList.remove("hidden");
   } finally {
     $("generateBtn").disabled = false;
+    $("generateBtn").textContent = "生成套图";
     $("generateLoading").classList.add("hidden");
+    $("genProgressBar").classList.add("hidden");
   }
 });
 
@@ -579,97 +596,40 @@ async function imageBlobUrl(jobId, index) {
   return URL.createObjectURL(blob);
 }
 
-// ---------------- history (grouped into batches -- one click of "生成套图" = one batch) ----------------
-async function loadHistory() {
-  const jobs = await API.listGenerations(1);
-
-  // group while preserving the server's reverse-chronological order; jobs from
-  // the same batch were created back-to-back so they naturally cluster together
-  const batches = [];
-  const byId = new Map();
-  for (const job of jobs) {
-    if (!byId.has(job.batch_id)) {
-      const b = { batch_id: job.batch_id, jobs: [] };
-      byId.set(job.batch_id, b);
-      batches.push(b);
-    }
-    byId.get(job.batch_id).jobs.push(job);
-  }
-
-  const grid = $("historyGrid");
-  grid.innerHTML = "";
-
-  for (const batch of batches) {
-    const firstJob = batch.jobs[0];
-    const totalImages = batch.jobs.reduce((s, j) => s + j.output_images.length, 0);
-    const totalCost = batch.jobs.reduce((s, j) => s + j.cost, 0);
-    const anyFailed = batch.jobs.some((j) => j.status === "failed");
-    const chosen = HISTORY_SELECTED.has(batch.batch_id);
-
-    const card = document.createElement("div");
-    card.className = "gen-card";
-    card.style.gridColumn = "span 2";
-
-    let thumbsHtml = '<div class="muted" style="padding:20px;text-align:center;">无图片</div>';
-    const thumbUrls = [];
-    for (const job of batch.jobs) {
-      for (let i = 0; i < job.output_images.length; i++) {
-        thumbUrls.push(await imageBlobUrl(job.id, i));
-        if (thumbUrls.length >= 8) break;
-      }
-      if (thumbUrls.length >= 8) break;
-    }
-    if (thumbUrls.length) {
-      thumbsHtml = `<div class="thumb-list">${thumbUrls.map((u) => `<img src="${u}" />`).join("")}</div>`;
-    }
-
-    card.innerHTML = `
-      <div style="padding:10px;">${thumbsHtml}</div>
-      <div class="meta">
-        <label class="row" style="font-size:12px;">
-          <input type="checkbox" data-batch="${batch.batch_id}" ${chosen ? "checked" : ""} /> 选择打包（多批一起下载）
-        </label>
-        <div>${new Date(firstJob.created_at + "Z").toLocaleString()}</div>
-        <div>状态：${anyFailed ? "部分失败" : "成功"} · 共 ${totalImages} 张 · ¥${totalCost.toFixed(2)}</div>
-        <div class="muted">${new Date(firstJob.expire_at + "Z").toLocaleDateString()} 到期</div>
-        <button class="btn secondary" data-act="download-batch" style="margin-top:6px;padding:4px 10px;font-size:12px;">下载本批次</button>
-      </div>
-    `;
-    card.querySelector("input[type=checkbox]").addEventListener("change", (e) => {
-      if (e.target.checked) HISTORY_SELECTED.add(batch.batch_id);
-      else HISTORY_SELECTED.delete(batch.batch_id);
+async function downloadBatches(batchIds, triggerBtn) {
+  const btns = [triggerBtn].filter(Boolean);
+  const originalTexts = btns.map((b) => b.textContent);
+  btns.forEach((b) => { b.disabled = true; b.textContent = "打包下载中…"; });
+  try {
+    const token = API.getToken();
+    const resp = await fetch("/api/generations/batch-download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ batch_ids: batchIds }),
     });
-    card.querySelector('[data-act=download-batch]').addEventListener("click", () => downloadBatches([batch.batch_id]));
-    grid.appendChild(card);
+    if (!resp.ok) {
+      let msg = "下载失败";
+      try { msg = (await resp.json()).detail || msg; } catch (e) {}
+      alert(msg);
+      return;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "generations.zip";
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("下载失败：" + err.message);
+  } finally {
+    btns.forEach((b, i) => { b.disabled = false; b.textContent = originalTexts[i]; });
   }
 }
 
-async function downloadBatches(batchIds) {
-  const token = API.getToken();
-  const resp = await fetch("/api/generations/batch-download", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-    body: JSON.stringify({ batch_ids: batchIds }),
-  });
-  if (!resp.ok) {
-    alert("下载失败");
-    return;
-  }
-  const blob = await resp.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "generations.zip";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-$("downloadSelectedBtn").addEventListener("click", () => {
-  if (HISTORY_SELECTED.size === 0) {
-    alert("请先勾选要下载的批次");
-    return;
-  }
-  downloadBatches([...HISTORY_SELECTED]);
+$("downloadThisBatchBtn").addEventListener("click", (e) => {
+  if (!LAST_BATCH_ID) return;
+  downloadBatches([LAST_BATCH_ID], e.currentTarget);
 });
 
 // ---------------- utils ----------------

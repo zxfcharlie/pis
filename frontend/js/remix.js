@@ -6,7 +6,7 @@ let TEMPLATES = [];
 let SELECTED_TEMPLATE = null;
 let EDITING_TEMPLATE_ID = null; // null = creating new
 let UPLOAD_FILES = [];
-let HISTORY_SELECTED = new Set();
+let LAST_BATCH_ID = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -38,7 +38,6 @@ async function init() {
   try {
     await loadFilters();
     await loadTemplates();
-    await loadHistory();
   } catch (e) {
     console.error("failed to load remix page data:", e);
   }
@@ -52,6 +51,10 @@ function renderNav() {
   back.href = "/index.html";
   back.textContent = "返回套图";
   nav.appendChild(back);
+  const hist = document.createElement("a");
+  hist.href = "/history.html";
+  hist.textContent = "生成历史";
+  nav.appendChild(hist);
   if (ME && ME.is_admin) {
     const a = document.createElement("a");
     a.href = "/admin.html";
@@ -87,6 +90,9 @@ async function loadFilters() {
   PRODUCT_OPTIONS = opts.products || [];
   const el = $("filterProduct");
   el.innerHTML = "";
+  if (PRODUCT_OPTIONS.length === 0) {
+    el.innerHTML = '<span class="muted" style="font-size:12px;">暂无产品筛选项</span>';
+  }
   PRODUCT_OPTIONS.forEach((v) => {
     const chip = document.createElement("div");
     chip.className = "chip" + (SELECTED_PRODUCTS.has(v) ? " active" : "");
@@ -108,19 +114,36 @@ $("mineOnlyChk").addEventListener("change", async () => {
 
 // ---------------- templates ----------------
 async function loadTemplates() {
+  const grid = $("tplGrid");
+  grid.innerHTML = '<div class="muted">加载中…</div>';
+
   TEMPLATES = await API.listRemixTemplates({
     product: [...SELECTED_PRODUCTS],
     mine_only: $("mineOnlyChk").checked,
   });
   $("tplCount").textContent = TEMPLATES.length;
-  const grid = $("tplGrid");
+
+  if (TEMPLATES.length === 0) {
+    grid.innerHTML = `<div class="muted" style="grid-column:1/-1;padding:20px;text-align:center;">
+      还没有任何二创套图模板${SELECTED_PRODUCTS.size ? "（当前筛选条件下没有匹配的）" : ""}，点左侧"+ 新建二创模板"创建一个。
+    </div>`;
+    return;
+  }
+
+  // fetch every card's 图1 thumbnail in parallel instead of one-at-a-time -- this
+  // was the main source of slow loading when there were more than a couple templates.
+  const bgUrls = await Promise.all(TEMPLATES.map((t) => bgImageBlobUrl(t.id)));
+
   grid.innerHTML = "";
-  for (const t of TEMPLATES) {
+  TEMPLATES.forEach((t, idx) => {
+    const isSelected = SELECTED_TEMPLATE && SELECTED_TEMPLATE.id === t.id;
     const card = document.createElement("div");
-    card.className = "tpl-card" + (SELECTED_TEMPLATE && SELECTED_TEMPLATE.id === t.id ? " selected" : "");
-    const bgUrl = await bgImageBlobUrl(t.id);
+    card.className = "tpl-card" + (isSelected ? " selected" : "");
     card.innerHTML = `
-      <img src="${bgUrl}" style="width:100%;height:120px;object-fit:cover;border-radius:6px;margin-bottom:8px;" />
+      <div style="position:relative;">
+        <img src="${bgUrls[idx]}" style="width:100%;height:120px;object-fit:cover;border-radius:6px;margin-bottom:8px;" />
+        ${isSelected ? '<span class="tag system" style="position:absolute;top:6px;right:6px;">✓ 已选择</span>' : ""}
+      </div>
       <div class="name">${escapeHtml(t.name)}</div>
       <div class="tags">
         ${t.is_system ? '<span class="tag system">系统模板</span>' : '<span class="tag">我的模板</span>'}
@@ -136,15 +159,19 @@ async function loadTemplates() {
     const editBtn = card.querySelector('[data-act=edit]');
     if (editBtn) editBtn.addEventListener("click", (e) => { e.stopPropagation(); openEditor(t); });
     grid.appendChild(card);
-  }
+  });
 }
 
 async function bgImageBlobUrl(templateId) {
   const token = API.getToken();
-  const resp = await fetch(API.remixBackgroundImageUrl(templateId), { headers: { Authorization: "Bearer " + token } });
-  if (!resp.ok) return "";
-  const blob = await resp.blob();
-  return URL.createObjectURL(blob);
+  try {
+    const resp = await fetch(API.remixBackgroundImageUrl(templateId), { headers: { Authorization: "Bearer " + token } });
+    if (!resp.ok) return "";
+    const blob = await resp.blob();
+    return URL.createObjectURL(blob);
+  } catch (e) {
+    return "";
+  }
 }
 
 function selectTemplate(t) {
@@ -207,6 +234,10 @@ $("saveTemplateBtn").addEventListener("click", async () => {
   if (!EDITING_TEMPLATE_ID) fd.append("as_system", $("editAsSystem").checked);
   if (file) fd.append("background_image", file);
 
+  const btn = $("saveTemplateBtn");
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = "保存中…";
   try {
     if (EDITING_TEMPLATE_ID) {
       await API.updateRemixTemplate(EDITING_TEMPLATE_ID, fd);
@@ -219,6 +250,9 @@ $("saveTemplateBtn").addEventListener("click", async () => {
   } catch (err) {
     $("editorError").textContent = err.message;
     $("editorError").classList.remove("hidden");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
 });
 
@@ -261,7 +295,7 @@ function updateCostEstimate() {
   $("costEstimate").textContent = n ? `本次共 ${n} 张，预计花费 ${cost}（每张 ${ME.cost_per_image}）` : "";
 }
 
-// ---------------- generate ----------------
+// ---------------- generate: one call per uploaded photo, so we get a real progress bar ----------------
 $("generateBtn").addEventListener("click", async () => {
   $("generateError").classList.add("hidden");
   if (!SELECTED_TEMPLATE) {
@@ -275,23 +309,46 @@ $("generateBtn").addEventListener("click", async () => {
     return;
   }
 
-  const fd = new FormData();
-  fd.append("remix_template_id", SELECTED_TEMPLATE.id);
-  UPLOAD_FILES.forEach((f) => fd.append("images", f));
-  fd.append("prompt_override", $("genPrompt").value || "");
-  fd.append("img_size", $("imgSize").value);
-  fd.append("img_quality", $("imgQuality").value);
-  fd.append("img_output_format", $("imgFormat").value);
-  fd.append("img_background", $("imgBackground").value);
+  const batchId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ("b" + Date.now() + Math.random().toString(16).slice(2));
+  LAST_BATCH_ID = batchId;
+
+  const total = UPLOAD_FILES.length;
+  let done = 0;
+  const updateProgress = () => {
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    $("genProgressFill").style.width = pct + "%";
+    $("generateLoading").textContent = `正在生成 ${done}/${total} 张…`;
+  };
 
   $("generateBtn").disabled = true;
+  $("generateBtn").textContent = "生成中…";
   $("generateLoading").classList.remove("hidden");
+  $("genProgressBar").classList.remove("hidden");
+  updateProgress();
+
+  const results = [];
   try {
-    const jobs = await API.generateRemix(fd);
+    for (const file of UPLOAD_FILES) {
+      const fd = new FormData();
+      fd.append("remix_template_id", SELECTED_TEMPLATE.id);
+      fd.append("image", file);
+      fd.append("batch_id", batchId);
+      fd.append("prompt_override", $("genPrompt").value || "");
+      fd.append("img_size", $("imgSize").value);
+      fd.append("img_quality", $("imgQuality").value);
+      fd.append("img_output_format", $("imgFormat").value);
+      fd.append("img_background", $("imgBackground").value);
+
+      const job = await API.remixGenerateOne(fd);
+      results.push(job);
+      done++;
+      updateProgress();
+      // show results incrementally so the user sees progress, not just a spinner
+      await renderResults(results);
+    }
+
     await loadMe();
-    await loadHistory();
-    await renderResults(jobs);
-    const failed = jobs.filter((j) => j.status === "failed");
+    const failed = results.filter((j) => j.status === "failed");
     if (failed.length) {
       $("generateError").textContent = `${failed.length} 张生成失败：` + failed.map((j) => j.error_message).join("; ");
       $("generateError").classList.remove("hidden");
@@ -301,7 +358,9 @@ $("generateBtn").addEventListener("click", async () => {
     $("generateError").classList.remove("hidden");
   } finally {
     $("generateBtn").disabled = false;
+    $("generateBtn").textContent = "开始批量生成";
     $("generateLoading").classList.add("hidden");
+    $("genProgressBar").classList.add("hidden");
   }
 });
 
@@ -317,8 +376,13 @@ async function renderResults(jobs) {
       card.innerHTML = `<img src="${url}" /><div class="meta">成本 ${job.cost.toFixed(2)}</div>`;
       grid.appendChild(card);
     }
+    if (job.status === "failed") {
+      const card = document.createElement("div");
+      card.className = "gen-card";
+      card.innerHTML = `<div class="muted" style="padding:20px;text-align:center;">生成失败</div><div class="meta">${escapeHtml(job.error_message)}</div>`;
+      grid.appendChild(card);
+    }
   }
-  $("resultPanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 async function imageBlobUrl(jobId, index) {
@@ -329,89 +393,38 @@ async function imageBlobUrl(jobId, index) {
   return URL.createObjectURL(blob);
 }
 
-// ---------------- history (二创生成记录, grouped by batch) ----------------
-async function loadHistory() {
-  const jobs = (await API.listGenerations(1)).filter((j) => j.remix_template_id);
-
-  const batches = [];
-  const byId = new Map();
-  for (const job of jobs) {
-    if (!byId.has(job.batch_id)) {
-      const b = { batch_id: job.batch_id, jobs: [] };
-      byId.set(job.batch_id, b);
-      batches.push(b);
-    }
-    byId.get(job.batch_id).jobs.push(job);
-  }
-
-  const grid = $("historyGrid");
-  grid.innerHTML = "";
-  for (const batch of batches) {
-    const firstJob = batch.jobs[0];
-    const totalImages = batch.jobs.reduce((s, j) => s + j.output_images.length, 0);
-    const totalCost = batch.jobs.reduce((s, j) => s + j.cost, 0);
-    const anyFailed = batch.jobs.some((j) => j.status === "failed");
-    const chosen = HISTORY_SELECTED.has(batch.batch_id);
-
-    const thumbUrls = [];
-    for (const job of batch.jobs) {
-      for (let i = 0; i < job.output_images.length; i++) {
-        thumbUrls.push(await imageBlobUrl(job.id, i));
-        if (thumbUrls.length >= 8) break;
-      }
-      if (thumbUrls.length >= 8) break;
-    }
-    const thumbsHtml = thumbUrls.length
-      ? `<div class="thumb-list">${thumbUrls.map((u) => `<img src="${u}" />`).join("")}</div>`
-      : '<div class="muted" style="padding:20px;text-align:center;">无图片</div>';
-
-    const card = document.createElement("div");
-    card.className = "gen-card";
-    card.style.gridColumn = "span 2";
-    card.innerHTML = `
-      <div style="padding:10px;">${thumbsHtml}</div>
-      <div class="meta">
-        <label class="row" style="font-size:12px;">
-          <input type="checkbox" data-batch="${batch.batch_id}" ${chosen ? "checked" : ""} /> 选择打包（多批一起下载）
-        </label>
-        <div>${new Date(firstJob.created_at + "Z").toLocaleString()}</div>
-        <div>状态：${anyFailed ? "部分失败" : "成功"} · 共 ${totalImages} 张 · ¥${totalCost.toFixed(2)}</div>
-        <div class="muted">${new Date(firstJob.expire_at + "Z").toLocaleDateString()} 到期</div>
-        <button class="btn secondary" data-act="download-batch" style="margin-top:6px;padding:4px 10px;font-size:12px;">下载本批次</button>
-      </div>
-    `;
-    card.querySelector("input[type=checkbox]").addEventListener("change", (e) => {
-      if (e.target.checked) HISTORY_SELECTED.add(batch.batch_id);
-      else HISTORY_SELECTED.delete(batch.batch_id);
+$("downloadThisBatchBtn").addEventListener("click", async (e) => {
+  if (!LAST_BATCH_ID) return;
+  const btn = e.currentTarget;
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "打包下载中…";
+  try {
+    const token = API.getToken();
+    const resp = await fetch("/api/generations/batch-download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ batch_ids: [LAST_BATCH_ID] }),
     });
-    card.querySelector('[data-act=download-batch]').addEventListener("click", () => downloadBatches([batch.batch_id]));
-    grid.appendChild(card);
+    if (!resp.ok) {
+      let msg = "下载失败";
+      try { msg = (await resp.json()).detail || msg; } catch (err) {}
+      alert(msg);
+      return;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "generations.zip";
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("下载失败：" + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
-}
-
-async function downloadBatches(batchIds) {
-  const token = API.getToken();
-  const resp = await fetch("/api/generations/batch-download", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-    body: JSON.stringify({ batch_ids: batchIds }),
-  });
-  if (!resp.ok) { alert("下载失败"); return; }
-  const blob = await resp.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "generations.zip";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-$("downloadSelectedBtn").addEventListener("click", () => {
-  if (HISTORY_SELECTED.size === 0) {
-    alert("请先勾选要下载的批次");
-    return;
-  }
-  downloadBatches([...HISTORY_SELECTED]);
 });
 
 // ---------------- utils ----------------

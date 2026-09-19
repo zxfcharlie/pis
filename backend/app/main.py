@@ -71,8 +71,21 @@ def health():
 
 
 # ---- serve the static frontend last, so it never shadows /api or /v1 routes ----
+class NoCacheStaticFiles(StaticFiles):
+    """Every deploy of this project so far has shipped meaningful frontend
+    fixes; a browser silently serving yesterday's cached app.js/remix.js
+    after a redeploy is a real, hard-to-diagnose source of "it's still
+    broken" reports. Force revalidation on every load instead of trusting
+    default heuristic caching."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 if FRONTEND_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+    app.mount("/", NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
 else:
     logger.warning("frontend directory not found at %s - API-only mode", FRONTEND_DIR)

@@ -72,8 +72,15 @@ const API = (() => {
     deleteTemplate: (id) => request(`/api/templates/${id}`, { method: "DELETE" }),
 
     generate: (formData) => request("/api/generate", { method: "POST", body: formData, isForm: true }),
-    generateRemix: (formData) => request("/api/generate/remix", { method: "POST", body: formData, isForm: true }),
-    listGenerations: (page = 1) => request(`/api/generations?page=${page}&page_size=20`),
+    remixGenerateOne: (formData) => request("/api/generate/remix", { method: "POST", body: formData, isForm: true }),
+    listGenerations: (params = {}) => {
+      const qs = new URLSearchParams();
+      qs.append("page", params.page || 1);
+      qs.append("page_size", params.page_size || 20);
+      if (params.kind) qs.append("kind", params.kind);
+      if (params.days) qs.append("days", params.days);
+      return request("/api/generations?" + qs.toString());
+    },
     batchDownload: (batchIds) => request("/api/generations/batch-download", { method: "POST", body: { batch_ids: batchIds } }),
 
     // ---- 二创套图模板 ----

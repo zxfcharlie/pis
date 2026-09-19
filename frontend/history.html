@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>生成历史 · 套图生成服务</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🗂 生成历史</h1>
+  <nav id="navArea"></nav>
+</header>
+
+<main>
+
+  <div id="authGate" class="card hidden">
+    <p>请先<a href="/index.html">登录</a>后查看生成历史。</p>
+  </div>
+
+  <div id="historyView" class="hidden">
+
+    <div class="card">
+      <div class="row">
+        <label>类型
+          <select id="filterKind">
+            <option value="">全部</option>
+            <option value="template">套图模板</option>
+            <option value="remix">二创套图</option>
+            <option value="custom">自定义</option>
+          </select>
+        </label>
+        <label>产品
+          <select id="filterProduct"><option value="">全部</option></select>
+        </label>
+        <label>时间
+          <select id="filterDays">
+            <option value="">全部</option>
+            <option value="1">今天</option>
+            <option value="7">近7天</option>
+            <option value="30">近30天</option>
+          </select>
+        </label>
+        <button class="btn secondary" id="refreshBtn">刷新</button>
+        <span class="muted" id="autoRefreshHint">每 30 秒自动刷新一次</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row between">
+        <h3 style="margin:0;">共 <span id="batchCount">0</span> 批</h3>
+        <button class="btn secondary" id="downloadSelectedBtn">批量打包下载所选</button>
+      </div>
+      <p class="muted">生成的图片 15 天后自动过期删除，请及时下载保存。</p>
+      <div id="loadingHint" class="muted hidden">加载中…</div>
+      <div class="gen-grid" id="historyGrid"></div>
+    </div>
+
+  </div>
+</main>
+
+<script src="/js/api.js"></script>
+<script src="/js/history.js"></script>
+</body>
+</html>

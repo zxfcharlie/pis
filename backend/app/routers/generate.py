@@ -28,9 +28,20 @@ OVERRIDE_KEYS = [
 
 
 def _job_to_out(job: models.GenerationJob) -> schemas.GenerationOut:
+    if job.remix_template_id:
+        kind = "remix"
+        product = job.remix_template.product if job.remix_template else ""
+    elif job.template_id:
+        kind = "template"
+        product = job.template.product if job.template else ""
+    else:
+        kind = "custom"
+        product = ""
     return schemas.GenerationOut(
         id=job.id,
         batch_id=job.batch_id or f"job-{job.id}",
+        kind=kind,
+        product=product,
         template_id=job.template_id,
         remix_template_id=job.remix_template_id,
         prompt_snapshot=json.loads(job.prompt_snapshot_json or "{}"),
@@ -192,10 +203,11 @@ def generate(
     return _job_to_out(job)
 
 
-@router.post("/api/generate/remix", response_model=List[schemas.GenerationOut])
+@router.post("/api/generate/remix", response_model=schemas.GenerationOut)
 def generate_remix(
     remix_template_id: int = Form(...),
-    images: List[UploadFile] = File(...),  # batch of product photos (图2), one output per photo
+    image: UploadFile = File(...),  # ONE product photo (图2) per call -- the frontend loops over its batch
+    batch_id: Optional[str] = Form(None),
     prompt_override: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
     img_size: Optional[str] = Form("auto"),
@@ -205,9 +217,6 @@ def generate_remix(
     user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not (1 <= len(images) <= 20):
-        raise HTTPException(status_code=400, detail="请上传1-20张产品图，每张会各自生成一张结果")
-
     tpl = db.query(models.RemixTemplate).filter(models.RemixTemplate.id == remix_template_id).first()
     if not tpl:
         raise HTTPException(status_code=404, detail="二创套图模板不存在")
@@ -228,83 +237,89 @@ def generate_remix(
 
     cfg = crud.get_or_create_global_config(db)
     cost_per_image = user.cost_per_image or cfg.default_cost_per_image
-    projected_cost = cost_per_image * len(images)
-    if crud.used_today(db, user.id) + projected_cost > user.daily_quota:
+    if crud.used_today(db, user.id) + cost_per_image > user.daily_quota:
         raise HTTPException(status_code=403, detail="今日生成额度已用完，请明天再试或联系管理员调整额度")
 
     provider = crud.get_active_provider(db)
-    batch_id = uuid.uuid4().hex
     ext = img_output_format if img_output_format in ("png", "jpeg", "webp") else "png"
-    results = []
+    product_bytes = image.file.read()
 
-    for img in images:
-        product_bytes = img.file.read()
-        input_rel_paths = [
-            storage.save_upload_bytes(user.id, "background_ref.png", background_bytes),
-            storage.save_upload_bytes(user.id, img.filename or "product.png", product_bytes),
-        ]
-        job_token = uuid.uuid4().hex
-        try:
-            output_images_bytes = image_gen.generate_images(
-                [background_bytes, product_bytes],
-                n=1,
-                provider=provider,
-                size=img_size,
-                quality=img_quality,
-                output_format=img_output_format,
-                background=img_background,
-                model=model,
-                raw_prompt=prompt_text,
-            )
-            status_str = "success"
-            error_message = ""
-        except Exception as e:  # pragma: no cover - defensive
-            output_images_bytes = []
-            status_str = "failed"
-            error_message = str(e)
+    input_rel_paths = [
+        storage.save_upload_bytes(user.id, "background_ref.png", background_bytes),
+        storage.save_upload_bytes(user.id, image.filename or "product.png", product_bytes),
+    ]
+    job_token = uuid.uuid4().hex
+    effective_batch_id = batch_id or job_token
 
-        output_rel_paths = (
-            storage.save_generated_images(user.id, job_token, output_images_bytes, ext=ext)
-            if output_images_bytes
-            else []
+    try:
+        output_images_bytes = image_gen.generate_images(
+            [background_bytes, product_bytes],
+            n=1,
+            provider=provider,
+            size=img_size,
+            quality=img_quality,
+            output_format=img_output_format,
+            background=img_background,
+            model=model,
+            raw_prompt=prompt_text,
         )
-        actual_cost = cost_per_image * len(output_rel_paths)
+        status_str = "success"
+        error_message = ""
+    except Exception as e:  # pragma: no cover - defensive
+        output_images_bytes = []
+        status_str = "failed"
+        error_message = str(e)
 
-        job = models.GenerationJob(
-            user_id=user.id,
-            remix_template_id=tpl.id,
-            batch_id=batch_id,
-            prompt_snapshot_json=json.dumps({"prompt": prompt_text}, ensure_ascii=False),
-            input_images_json=json.dumps(input_rel_paths, ensure_ascii=False),
-            output_images_json=json.dumps(output_rel_paths, ensure_ascii=False),
-            image_count=len(output_rel_paths),
-            cost=actual_cost,
-            status=status_str,
-            error_message=error_message,
-            created_at=datetime.datetime.utcnow(),
-            expire_at=datetime.datetime.utcnow() + datetime.timedelta(days=settings.IMAGE_EXPIRE_DAYS),
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        results.append(_job_to_out(job))
+    output_rel_paths = (
+        storage.save_generated_images(user.id, job_token, output_images_bytes, ext=ext)
+        if output_images_bytes
+        else []
+    )
+    actual_cost = cost_per_image * len(output_rel_paths)
 
-    return results
+    job = models.GenerationJob(
+        user_id=user.id,
+        remix_template_id=tpl.id,
+        batch_id=effective_batch_id,
+        prompt_snapshot_json=json.dumps({"prompt": prompt_text}, ensure_ascii=False),
+        input_images_json=json.dumps(input_rel_paths, ensure_ascii=False),
+        output_images_json=json.dumps(output_rel_paths, ensure_ascii=False),
+        image_count=len(output_rel_paths),
+        cost=actual_cost,
+        status=status_str,
+        error_message=error_message,
+        created_at=datetime.datetime.utcnow(),
+        expire_at=datetime.datetime.utcnow() + datetime.timedelta(days=settings.IMAGE_EXPIRE_DAYS),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return _job_to_out(job)
 
 
 @router.get("/api/generations", response_model=List[schemas.GenerationOut])
 def list_generations(
     page: int = 1,
     page_size: int = 20,
+    kind: Optional[str] = None,  # "template" | "remix" | "custom"
+    days: Optional[int] = None,  # only jobs created in the last N days
     user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     page = max(page, 1)
-    page_size = min(max(page_size, 1), 100)
+    page_size = min(max(page_size, 1), 300)
+    q = db.query(models.GenerationJob).filter(models.GenerationJob.user_id == user.id)
+    if kind == "template":
+        q = q.filter(models.GenerationJob.template_id.isnot(None))
+    elif kind == "remix":
+        q = q.filter(models.GenerationJob.remix_template_id.isnot(None))
+    elif kind == "custom":
+        q = q.filter(models.GenerationJob.template_id.is_(None), models.GenerationJob.remix_template_id.is_(None))
+    if days:
+        since = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+        q = q.filter(models.GenerationJob.created_at >= since)
     jobs = (
-        db.query(models.GenerationJob)
-        .filter(models.GenerationJob.user_id == user.id)
-        .order_by(models.GenerationJob.created_at.desc())
+        q.order_by(models.GenerationJob.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()

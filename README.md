@@ -33,8 +33,9 @@ product-image-service/
 │           ├── storage.py       # 文件落盘 / 15天过期清理 / 按批次zip打包 / 二创背景图存取
 │           └── relay_client.py  # 反代到当前激活供应商的通用请求/流式转发
 └── frontend/                    # 原生 HTML/CSS/JS，无需构建
-    ├── index.html                主应用：筛选模板 -> 生成 -> 按批次的历史记录
-    ├── remix.html                二创套图：模板管理 + 批量放置产品
+    ├── index.html                主应用：筛选模板 -> 生成 -> 本次结果（完整历史见 history.html）
+    ├── remix.html                二创套图：模板管理 + 批量放置产品（逐张生成，实时进度条）
+    ├── history.html               生成历史：按类型/产品/时间筛选，批量下载
     ├── admin.html                管理后台
     └── js/ , css/
 ```
@@ -148,6 +149,13 @@ curl http://<本服务地址>:8411/v1/chat/completions \
 - 额度判断用的是"今日（UTC）已产生的成功生成成本之和 + 本次预计花费 <= daily_quota"，在 `routers/generate.py` 里下单前校验。
 - 过期清理是"软删除友好"的：只删过期的 `GenerationJob` 行和它对应的图片文件，不影响模板、用户、统计里的历史成本汇总（`admin/stats` 里的累计成本是所有历史成功记录之和，不受清理影响，因为清理只删 `GenerationJob` 行本身——如果你想要"过期后也不再计入累计成本"，那清理时得改成只删文件不删行，这个可以按你实际需要再调）。
 - `RelayProvider` 表存所有配置过的供应商，`is_active` 标记当前用哪个（`routers/admin.py::activate_provider` 切换时会把其它行的 `is_active` 全部置为 `False`，保证同一时间只有一个生效）。
+
+## 历史记录独立页面、二创改成逐张生成、静态资源防缓存
+
+- **生成历史搬到独立页面 `/history.html`**：之前 `index.html`/`remix.html` 各自内嵌一份历史记录，每次进页面都会抢先拉一堆缩略图，是"加载慢"的主因之一。现在两个页面只保留"本次生成结果"（`resultPanel`，带"打包下载本次生成"按钮），完整的历史记录、筛选（类型=套图/二创/自定义、产品、时间范围）、批量下载都在 `/history.html` 里，缩略图用 `Promise.all` 并发拉取（不再是一张等一张），每 30 秒自动刷新一次。`GET /api/generations` 新增 `kind`/`days` 查询参数，`GenerationOut` 新增 `kind`/`product` 字段（从 `GenerationJob.template`/`remix_template` 关系解析，`models.py` 里补了这两个 `relationship`）。
+- **二创批量生成改成"一张一请求"**：原来 `POST /api/generate/remix` 是一个 HTTP 请求里服务端循环处理全部上传的图，前端在请求返回之前完全看不到进度。现在跟主套图页的多模板生成一样，前端逐张调用（`batch_id` 由前端生成、每张请求带上同一个），这样才有真实的"正在生成 X/Y 张"进度条，某一张失败也不会拖累其它张，还能在结果面板里边生成边看结果。
+- **静态资源加了 `Cache-Control: no-cache`**（`main.py` 的 `NoCacheStaticFiles`）：之前 JS/CSS 走的是浏览器默认的启发式缓存，重新部署之后如果不硬刷新，页面很可能还在用旧版本的 `app.js`/`remix.js`，表现就是"这个功能怎么还是老样子/怎么又坏了"。现在每次都会强制向服务器确认文件有没有变化。
+- **产品权限的一个重要行为**：管理员账号永远不受产品权限限制（`crud.get_allowed_products` 对 `is_admin=True` 直接返回"不限制"），这是故意的，避免管理员把自己配置锁在外面。如果你是拿管理员账号测试权限效果，看到"还是能看到所有产品"是预期行为——权限限制只对非管理员账号生效，测试请用一个没有管理员权限的账号。
 
 ## 数据库自动迁移
 

@@ -113,6 +113,8 @@ class GenerationJob(Base):
     expire_at = Column(DateTime, nullable=False, index=True)
 
     user = relationship("User", back_populates="jobs")
+    template = relationship("Template")
+    remix_template = relationship("RemixTemplate")
 
 
 class GlobalConfig(Base):

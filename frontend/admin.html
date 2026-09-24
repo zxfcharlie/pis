@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>管理后台 · 套图生成服务</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🛠 管理后台</h1>
+  <nav>
+    <a href="/index.html">返回应用</a>
+    <a href="/remix.html">二创套图</a>
+    <a href="/history.html">生成历史</a>
+    <button class="nav-btn" id="logoutBtn">退出登录</button>
+  </nav>
+</header>
+
+<main>
+  <div id="deniedView" class="card hidden">
+    <p>仅管理员可访问此页面。</p>
+  </div>
+
+  <div id="adminView" class="hidden">
+
+    <div class="card">
+      <h3>平台统计</h3>
+      <div class="row" id="statsRow" style="gap:24px;"></div>
+    </div>
+
+    <div class="card">
+      <h3>全局默认配置</h3>
+      <div class="row">
+        <label>默认单张成本
+          <input type="number" step="0.01" id="cfgCost" style="width:100px;" />
+        </label>
+        <label>默认每日额度
+          <input type="number" step="1" id="cfgQuota" style="width:100px;" />
+        </label>
+        <button class="btn" id="saveCfgBtn">保存</button>
+        <span id="cfgSaved" class="success-msg hidden">已保存</span>
+      </div>
+    </div>
+
+    <div class="card" id="providersCard">
+      <h3>API 供应商（可随时切换）</h3>
+      <p class="muted">套图生成和 <code class="key">/v1/*</code> 中转都走"当前使用"的这一个供应商。可以加多个，比如自建中转和 ToAPIs 同时留着，需要的时候一键切换。</p>
+      <table>
+        <thead>
+          <tr><th>名称</th><th>类型</th><th>Base URL</th><th>密钥</th><th>模型</th><th>状态</th><th>操作</th></tr>
+        </thead>
+        <tbody id="providersBody"></tbody>
+      </table>
+
+      <h4 style="margin-top:16px;">新增供应商</h4>
+      <div class="row">
+        <label>名称
+          <input type="text" id="newProviderName" placeholder="比如：ToAPIs" style="width:140px;" />
+        </label>
+        <label>类型
+          <select id="newProviderKind">
+            <option value="sync_edit">同步编辑接口（自建中转 / OpenAI 兼容 /images/edits）</option>
+            <option value="toapis_async">ToAPIs 异步任务接口</option>
+          </select>
+        </label>
+        <label style="flex:1;min-width:240px;">Base URL
+          <input type="text" id="newProviderBaseUrl" placeholder="http://<服务器>:8511/v1 或 https://toapis.com/v1" />
+        </label>
+        <label style="flex:1;min-width:200px;">密钥
+          <input type="text" id="newProviderApiKey" placeholder="rk-xxxx 或 sk-xxxx" />
+        </label>
+        <label style="width:160px;">图片模型
+          <input type="text" id="newProviderModel" placeholder="gpt-image-2" value="gpt-image-2" />
+        </label>
+        <button class="btn" id="addProviderBtn" style="align-self:flex-end;">添加</button>
+      </div>
+      <div class="error-msg hidden" id="providerError"></div>
+    </div>
+
+    <div class="card" id="pendingCard">
+      <h3>待审核用户（<span id="pendingCount">0</span>）</h3>
+      <table>
+        <thead><tr><th>用户名</th><th>注册时间</th><th>操作</th></tr></thead>
+        <tbody id="pendingBody"></tbody>
+      </table>
+      <p class="muted" id="pendingEmpty">暂无待审核账号</p>
+    </div>
+
+    <div class="card">
+      <h3>用户管理</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>用户名</th><th>状态</th><th>管理员</th><th>每日额度</th><th>单张成本</th>
+            <th>今日已用</th><th>累计生成</th><th>累计成本</th><th>注册时间</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>产品使用权限</h3>
+      <p class="muted">默认所有人可用全部产品；给某个用户分配了产品后，该用户就只能看到/使用这些产品下的模板（套图模板和二创套图模板都算）。不勾选任何产品 = 不限制。</p>
+      <div class="row">
+        <label>用户
+          <select id="paUserSelect" style="min-width:160px;"></select>
+        </label>
+        <button class="btn secondary" id="paLoadBtn">加载权限</button>
+      </div>
+      <div class="chip-list" id="paProductChips" style="margin-top:10px;"></div>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn" id="paSaveBtn">保存</button>
+        <span id="paSaved" class="success-msg hidden">已保存</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>全部套图模板</h3>
+      <div class="row" style="margin-bottom:10px;">
+        <label>季节
+          <select id="tplFilterSeason"><option value="">全部</option></select>
+        </label>
+        <label>产品
+          <select id="tplFilterProduct"><option value="">全部</option></select>
+        </label>
+        <label>所属人
+          <select id="tplFilterOwner">
+            <option value="">全部</option>
+            <option value="system">系统</option>
+          </select>
+        </label>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>名称</th><th>归属</th><th>季节</th><th>场景/细节</th><th>产品</th><th>区域</th>
+            <th>7天用量</th><th>30天用量</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="templatesBody"></tbody>
+      </table>
+    </div>
+
+    <!-- 套图模板编辑面板 -->
+    <div class="card hidden" id="tplEditorPanel">
+      <h3>编辑套图模板</h3>
+      <div class="row">
+        <label style="flex:1;">名称<input type="text" id="tplEditName" /></label>
+        <label>季节<input type="text" id="tplEditSeason" style="width:90px;" /></label>
+        <label>场景/细节<input type="text" id="tplEditScene" style="width:110px;" /></label>
+        <label>产品<input type="text" id="tplEditProduct" style="width:90px;" /></label>
+        <label>区域<input type="text" id="tplEditRegion" style="width:110px;" /></label>
+      </div>
+      <div id="tplEditFields"></div>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn" id="tplSaveBtn">保存</button>
+        <button class="btn secondary" id="tplCancelBtn">取消</button>
+      </div>
+      <div class="error-msg hidden" id="tplEditorError"></div>
+    </div>
+
+    <div class="card">
+      <h3>全部二创套图模板</h3>
+      <p class="muted">新建/编辑二创模板请去 <a href="/remix.html">二创套图</a> 页面（管理员在那边可以勾选"设为系统模板"）。</p>
+      <table>
+        <thead>
+          <tr><th>名称</th><th>归属</th><th>产品</th><th>提示词</th></tr>
+        </thead>
+        <tbody id="remixTemplatesBody"></tbody>
+      </table>
+    </div>
+
+  </div>
+</main>
+
+<script src="/js/api.js"></script>
+<script src="/js/admin.js"></script>
+</body>
+</html>

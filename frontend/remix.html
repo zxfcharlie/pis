@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>二创套图 · 套图生成服务</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🧩 二创套图</h1>
+  <nav id="navArea"></nav>
+</header>
+
+<main>
+
+  <div id="authGate" class="card hidden">
+    <p>请先<a href="/index.html">登录</a>后再使用二创套图功能。</p>
+  </div>
+
+  <div id="remixView" class="hidden">
+
+    <div class="card">
+      <div class="row between">
+        <div><strong id="meUsername"></strong></div>
+        <div class="muted">今日已用 <span id="quotaUsed">0</span> / <span id="quotaTotal">0</span></div>
+      </div>
+      <div class="quota-bar"><div id="quotaBar" style="width:0%"></div></div>
+      <p class="muted" style="margin-top:8px;">把上传的产品图批量放进预设好的背景图（图1）里，一张产品图对应生成一张结果。</p>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h3>筛选</h3>
+        <div class="filter-group">
+          <span class="label">产品</span>
+          <div class="chip-list" id="filterProduct"></div>
+        </div>
+        <label class="row" style="font-size:13px;">
+          <input type="checkbox" id="mineOnlyChk" /> 只看我自己的模板
+        </label>
+        <hr style="margin:14px 0; border:none; border-top:1px solid var(--border);" />
+        <button class="btn secondary" id="newTemplateBtn" style="width:100%;">+ 新建二创模板</button>
+      </div>
+
+      <div class="card">
+        <h3>二创套图模板（<span id="tplCount">0</span>）</h3>
+        <div class="tpl-grid" id="tplGrid"></div>
+      </div>
+    </div>
+
+    <!-- 新建/编辑模板 弹出面板 -->
+    <div class="card hidden" id="editorPanel">
+      <h3 id="editorTitle">新建二创模板</h3>
+      <label class="field-label">模板名称（建议格式：产品-描述，例如 沙发-低角度-白底）</label>
+      <input type="text" id="editName" placeholder="沙发-低角度-白底" />
+      <label class="field-label">产品（用于分类和权限）</label>
+      <input type="text" id="editProduct" placeholder="沙发" />
+      <label class="field-label">提示词</label>
+      <textarea id="editPrompt" style="min-height:70px;"></textarea>
+      <label class="field-label">图1（背景图）</label>
+      <input type="file" id="editBgFile" accept="image/*" />
+      <div id="editBgPreviewWrap" class="hidden" style="margin-top:8px;">
+        <span class="muted">当前图1：</span>
+        <img id="editBgPreview" style="width:120px;height:120px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" />
+      </div>
+      <label class="row" style="font-size:13px;margin-top:10px;" id="asSystemRow">
+        <input type="checkbox" id="editAsSystem" /> 设为系统模板（所有人可用，仅管理员可改）
+      </label>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn" id="saveTemplateBtn">保存</button>
+        <button class="btn secondary" id="cancelEditBtn">取消</button>
+        <button class="btn secondary" id="deleteTemplateBtn" style="border-color:var(--danger);color:var(--danger);">删除</button>
+      </div>
+      <div class="error-msg hidden" id="editorError"></div>
+    </div>
+
+    <!-- 生成面板 -->
+    <div class="card hidden" id="generatePanel">
+      <h3>批量生成</h3>
+      <div class="row">
+        <img id="genBgPreview" style="width:80px;height:80px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" />
+        <div>
+          <div id="genTplName" style="font-weight:600;"></div>
+          <div class="muted" id="genTplProduct"></div>
+        </div>
+      </div>
+
+      <label class="field-label">提示词（可修改本次生成用的提示词，不影响模板本身）</label>
+      <textarea id="genPrompt" style="min-height:60px;"></textarea>
+
+      <div class="row" style="margin-top:8px;">
+        <label style="font-size:13px;">尺寸
+          <select id="imgSize">
+            <option value="auto">自动</option>
+            <option value="1024x1024">1:1 正方形</option>
+            <option value="1024x1536">4:5 竖版</option>
+            <option value="1536x1024">16:9 横版</option>
+          </select>
+        </label>
+        <label style="font-size:13px;">质量
+          <select id="imgQuality">
+            <option value="auto">自动</option>
+            <option value="low">低</option>
+            <option value="medium">中</option>
+            <option value="high">高</option>
+          </select>
+        </label>
+        <label style="font-size:13px;">格式
+          <select id="imgFormat">
+            <option value="png">PNG</option>
+            <option value="jpeg">JPEG</option>
+            <option value="webp">WEBP</option>
+          </select>
+        </label>
+        <label style="font-size:13px;">背景
+          <select id="imgBackground">
+            <option value="auto">自动</option>
+            <option value="opaque">不透明</option>
+            <option value="transparent">透明</option>
+          </select>
+        </label>
+      </div>
+
+      <hr style="margin:14px 0; border:none; border-top:1px solid var(--border);" />
+
+      <label class="field-label">批量上传产品图（图2，最多20张，每张各生成一张结果）</label>
+      <input type="file" id="productImages" accept="image/*" multiple />
+      <div class="thumb-list" id="productPreview" style="margin-top:8px;"></div>
+
+      <div class="row" style="margin-top:12px;">
+        <span class="muted" id="costEstimate"></span>
+      </div>
+
+      <div style="margin-top:14px;">
+        <button class="btn" id="generateBtn">开始批量生成</button>
+        <span id="generateLoading" class="muted hidden">正在生成，请稍候…</span>
+      </div>
+      <div class="quota-bar hidden" id="genProgressBar" style="margin-top:8px;"><div id="genProgressFill" style="width:0%"></div></div>
+      <div class="error-msg hidden" id="generateError"></div>
+    </div>
+
+    <div class="card hidden" id="resultPanel">
+      <div class="row between">
+        <h3 style="margin:0;">本次生成结果</h3>
+        <button class="btn secondary" id="downloadThisBatchBtn">打包下载本次生成</button>
+      </div>
+      <div class="gen-grid" id="resultGrid"></div>
+    </div>
+
+    <div class="card">
+      <div class="row between">
+        <h3 style="margin:0;">生成历史</h3>
+        <a href="/history.html" class="btn secondary">查看完整历史 / 筛选 / 批量下载 →</a>
+      </div>
+      <p class="muted">生成的图片 15 天后自动过期删除，请及时下载保存。</p>
+    </div>
+
+  </div>
+</main>
+
+<script src="/js/api.js"></script>
+<script src="/js/remix.js"></script>
+</body>
+</html>

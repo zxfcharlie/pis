@@ -1,0 +1,240 @@
+import datetime
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
+
+# ---------- Auth ----------
+
+class RegisterIn(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=6, max_length=128)
+
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class RegisterOut(BaseModel):
+    status: str  # "active" | "pending"
+    message: str
+    access_token: Optional[str] = None
+    token_type: str = "bearer"
+
+
+class MeOut(BaseModel):
+    id: int
+    username: str
+    is_admin: bool
+    daily_quota: float
+    cost_per_image: float
+    used_today: float
+    relay_key: str
+
+    class Config:
+        from_attributes = True
+
+
+# ---------- Templates ----------
+
+class TemplateFields(BaseModel):
+    subject: str = ""
+    style: str = ""
+    photography: str = ""
+    atmosphere: str = ""
+    background: str = ""
+    light: str = ""
+    negative: str = ""
+    parameters: str = ""
+
+
+class TemplateCreateIn(TemplateFields):
+    name: str
+    season: str = ""
+    scene: str = ""
+    product: str = ""
+    region: str = ""
+
+
+class TemplateUpdateIn(BaseModel):
+    name: Optional[str] = None
+    season: Optional[str] = None
+    scene: Optional[str] = None
+    product: Optional[str] = None
+    region: Optional[str] = None
+    subject: Optional[str] = None
+    style: Optional[str] = None
+    photography: Optional[str] = None
+    atmosphere: Optional[str] = None
+    background: Optional[str] = None
+    light: Optional[str] = None
+    negative: Optional[str] = None
+    parameters: Optional[str] = None
+
+
+class TemplateOut(TemplateFields):
+    id: int
+    owner_id: Optional[int]
+    is_system: bool
+    editable: bool  # computed relative to the requesting user
+    name: str
+    season: str
+    scene: str
+    product: str
+    region: str
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TemplateFilterOptions(BaseModel):
+    seasons: List[str]
+    scenes: List[str]
+    products: List[str]
+    regions: List[str]
+
+
+class AdminTemplateOut(TemplateOut):
+    """Extends TemplateOut with the extra columns only the admin table shows."""
+    owner_username: Optional[str] = None
+    usage_7d: int = 0
+    usage_30d: int = 0
+
+
+# ---------- Generation ----------
+
+class GenerationOut(BaseModel):
+    id: int
+    batch_id: str
+    kind: str = "custom"  # "template" | "remix" | "custom"
+    product: str = ""
+    template_id: Optional[int] = None
+    remix_template_id: Optional[int] = None
+    prompt_snapshot: dict
+    input_images: List[str]
+    output_images: List[str]
+    image_count: int
+    cost: float
+    status: str
+    error_message: str
+    created_at: datetime.datetime
+    expire_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BatchDownloadIn(BaseModel):
+    batch_ids: List[str]
+
+
+# ---------- 二创套图模板 (remix templates) ----------
+
+class RemixTemplateOut(BaseModel):
+    id: int
+    owner_id: Optional[int]
+    is_system: bool
+    editable: bool
+    name: str
+    product: str
+    prompt: str
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ---------- Admin ----------
+
+class AdminUserOut(BaseModel):
+    id: int
+    username: str
+    is_admin: bool
+    is_approved: bool
+    daily_quota: float
+    cost_per_image: float
+    used_today: float
+    total_generated: int
+    total_cost: float
+    created_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AdminUserUpdateIn(BaseModel):
+    daily_quota: Optional[float] = None
+    cost_per_image: Optional[float] = None
+    is_admin: Optional[bool] = None
+    is_approved: Optional[bool] = None
+
+
+class AdminConfigOut(BaseModel):
+    default_cost_per_image: float
+    default_daily_quota: float
+
+
+class AdminConfigUpdateIn(BaseModel):
+    default_cost_per_image: Optional[float] = None
+    default_daily_quota: Optional[float] = None
+
+
+# ---------- Relay providers (switchable API upstreams) ----------
+
+class RelayProviderOut(BaseModel):
+    id: int
+    name: str
+    kind: str
+    base_url: str
+    api_key: str
+    image_model: str
+    is_active: bool
+    created_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RelayProviderCreateIn(BaseModel):
+    name: str
+    kind: str = "sync_edit"  # "sync_edit" | "toapis_async"
+    base_url: str
+    api_key: str
+    image_model: str = "gpt-image-2"
+
+
+class RelayProviderUpdateIn(BaseModel):
+    name: Optional[str] = None
+    kind: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    image_model: Optional[str] = None
+
+
+class AdminStatsOut(BaseModel):
+    total_users: int
+    total_generations: int
+    total_cost: float
+    today_generations: int
+    today_cost: float
+    per_user: List[AdminUserOut]
+
+
+# ---------- Product-based permissions ----------
+
+class UserProductAccessOut(BaseModel):
+    user_id: int
+    products: List[str]  # empty list = unrestricted (sees every product)
+
+
+class UserProductAccessSetIn(BaseModel):
+    products: List[str]  # full replacement set; empty list = clear restriction (unrestricted)

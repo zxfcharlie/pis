@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  product-image-service:
+    build: .
+    container_name: product-image-service
+    ports:
+      - "8411:8411"
+    volumes:
+      - ./data:/data
+    environment:
+      - PORT=8411
+      - SECRET_KEY=${SECRET_KEY:-please-change-this-secret}
+      - DEFAULT_COST_PER_IMAGE=${DEFAULT_COST_PER_IMAGE:-0.3}
+      - DEFAULT_DAILY_QUOTA=${DEFAULT_DAILY_QUOTA:-50}
+      - IMAGE_EXPIRE_DAYS=${IMAGE_EXPIRE_DAYS:-15}
+      - CLEANUP_INTERVAL_HOURS=${CLEANUP_INTERVAL_HOURS:-6}
+      # Leave these empty to run in placeholder-image demo mode. Both can also
+      # be set later from the admin panel (设置 -> 中转访问) without redeploying.
+      - REMOTE_RELAY_BASE_URL=${REMOTE_RELAY_BASE_URL:-}
+      - REMOTE_RELAY_API_KEY=${REMOTE_RELAY_API_KEY:-}
+      - IMAGE_GEN_MODEL=${IMAGE_GEN_MODEL:-gpt-image-2}
+      - CHAT_MODEL=${CHAT_MODEL:-claude-sonnet-4-6}
+      - RELAY_PUBLIC_BASE_URL=${RELAY_PUBLIC_BASE_URL:-https://dailybonushub.com}
+    restart: unless-stopped
